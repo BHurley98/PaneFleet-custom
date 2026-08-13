@@ -1,0 +1,90 @@
+# Contributing to PaneFleet
+
+Thank you for helping improve PaneFleet. This project sits on a sensitive boundary between a browser and live host processes, so small, reviewable changes with explicit safety evidence are preferred.
+
+## Development setup
+
+PaneFleet currently has zero runtime npm dependencies. Use Linux, Node.js 20 or newer, and the host tools listed in the [quick start](README.md#quick-start).
+
+```bash
+npm ci
+cp services.example.json services.json
+npm run verify:public
+HOST=127.0.0.1 PORT=8787 npm start
+```
+
+Keep the development server on loopback. Use synthetic tmux sessions and test fixtures rather than real work or private terminal content when developing features for publication.
+
+Enable the repository privacy guard:
+
+```bash
+npm run hooks:install
+```
+
+## Before changing a safety boundary
+
+Read the [Safety model](docs/safety-model.md). Changes must preserve these invariants unless the proposal explicitly replaces them with a stronger, tested design:
+
+- There is no arbitrary shell-command endpoint.
+- Every operational API route requires the current same-page control cookie; non-loopback listeners require the operator's Basic credential by default, with trusted-network mode allowed only behind independently verified exact-source ingress.
+- Normal agent input is literal text plus one Enter; interrupt, stop, and forced recovery remain distinct actions.
+- Sensitive terminal actions revalidate the exact tmux session and pane identity immediately before input.
+- Uncertain input is not retried or resubmitted automatically.
+- Queued prompts dispatch only after two stable exact-pane green observations; any uncertain attempt pauses for review and is never retried automatically.
+- Service controls are allowlisted in the local registry; unsafe actions require visible confirmation.
+- The dashboard lifecycle cannot destroy the workload tmux server.
+- Filesystem access stays within canonical allowlisted roots and remains bounded and redacted.
+- Tests never invoke real tmux, AWS, metadata, network-rule, or host-process mutations.
+
+## Code and tests
+
+- Keep the server on Node built-ins and the browser client dependency-free unless a dependency has a clear operational benefit and a documented maintenance cost.
+- Use ES modules and follow the existing plain JavaScript and CSS conventions.
+- Prefer focused modules and pure helpers when extracting behavior from the larger server or UI files.
+- Add tests for the expected behavior and the relevant failure paths. Boundary changes should have a fail-closed regression test.
+- Treat modal isolation as a runtime safety boundary. An element may become `inert` only after proving it is neither the active surface nor an ancestor of that surface; preserve that fail-closed guard and its structural regression test when markup moves.
+- For phone interaction changes involving `inert`, overflow, touch handling, fixed positioning, or stacking, manually verify portrait and short-landscape terminal scrolling, close-view behavior, background isolation, and live-refresh stability. Record the browser/device used; static source and CSS checks do not count as interaction evidence.
+- Prefer behavior-level tests against the real `server.js` entrypoint. Use the test-only temporary runtime root and fake executables; do not copy the server into a fixture or invoke live host tools.
+- Keep runtime and safety regressions in the core suite; put secondary UI, configuration, documentation, and Project Desk coverage in the feature suite. `npm test` runs core before features, still runs features after a core failure, and returns a failing status if either group fails.
+- Keep the coverage floor from regressing. Improve assertions and missing boundary behavior instead of excluding production files.
+- Keep `package-lock.json` synchronized with `package.json`, even though the current application has zero runtime dependencies.
+- Run the relevant focused suite while iterating. The launcher creates an isolated temporary directory and avoids temp filesystems with less than 256 MiB available. Before submitting, run the complete public verification:
+
+```bash
+npm run verify:public
+```
+
+## Privacy
+
+Do not include real pane output, prompts, mission text, credentials, private paths, hostnames, IP addresses, service names, or generated personal documents in code, tests, screenshots, issues, or pull requests.
+
+Use sanitized fixtures. Review both the file list and the content before committing:
+
+```bash
+git status --short
+git diff --cached --stat
+git diff --cached
+```
+
+The pre-commit hook checks staged content. `npm run privacy:check` also scans modified tracked files, untracked non-ignored files, and repository history, but neither can prove that a change is safe to publish.
+
+## Pull requests
+
+A useful pull request includes:
+
+- the operator problem being solved;
+- the intended behavior and non-goals;
+- the safety boundaries touched;
+- focused test evidence and the result of `npm run verify:public`;
+- manual desktop or phone checks for interaction changes; and
+- sanitized visuals when the change is primarily visual.
+
+Keep unrelated refactors separate. Do not bundle deployment, ingress, credential, or live service changes into a source pull request.
+
+## Security reports
+
+Do not use a public issue or pull request for a vulnerability. Follow [SECURITY.md](SECURITY.md).
+
+## Conduct
+
+Be respectful, specific, and evidence-driven. Critique the implementation and its tradeoffs, not the person proposing it.

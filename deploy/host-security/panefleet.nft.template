@@ -1,0 +1,36 @@
+#!/usr/sbin/nft -f
+
+# Approval-gated defense-in-depth firewall. Render exactly one confirmed public
+# home IPv4 without the /32 suffix. AWS security-group rules remain authoritative.
+define home_ipv4 = @HOME_IPV4@
+
+table inet panefleet_filter {
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    iifname "lo" accept
+    ct state invalid drop
+    ct state established,related accept
+
+    ip protocol icmp icmp type {
+      destination-unreachable,
+      time-exceeded,
+      parameter-problem,
+      echo-request
+    } accept
+    ip6 nexthdr ipv6-icmp accept
+
+    udp sport 67 udp dport 68 accept
+    udp sport 547 udp dport 546 accept
+
+    ip saddr $home_ipv4 tcp dport { 22, 80, 443 } ct state new accept
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority filter; policy accept;
+  }
+}

@@ -1,0 +1,36 @@
+[Unit]
+Description=Private companion web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@COMPANION_ROOT@
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=COMPANION_DB_PATH=@COMPANION_ROOT@/.data/app.sqlite
+Environment=PATH=@NODE_BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+ExecStart=@NODE_BIN_DIR@/npm start -- --hostname 127.0.0.1 --port 8104
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+NoNewPrivileges=true
+LockPersonality=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=@COMPANION_ROOT@/.data @COMPANION_ROOT@/.next/cache
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=default.target

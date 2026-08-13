@@ -1,0 +1,164 @@
+# Architecture
+
+PaneFleet is a single Node.js process with a dependency-free browser client. It observes a host through bounded command adapters, owns local coordination state, and sends mutations only through named allowlisted operations.
+
+## Components
+
+| Component | Responsibility |
+| --- | --- |
+| `public/index.html` | Static terminal-first shell and accessible control surfaces |
+| `public/app.js` | Browser rendering, interaction state, HTTP/SSE client, terminal windows, queue, Project Desk, and tools |
+| `public/ui-state.js` | Small pure helpers for layouts, drawer state, attention filtering, launcher outcomes, and guarded snapshot patch application |
+| `server.js` | HTTP authentication, static/API/SSE routing, host snapshots, exact-pane input, prompt queue, compatibility missions, notifications, Project Desk, services, and optional EC2 access |
+| `codex-telemetry.js` | Bounded live telemetry plus replayed, offset-checkpointed rollout-event and per-ticket usage accounting |
+| `durable-json.js` | Exclusive owner-only temporary files, flush, and atomic replacement for durable JSON stores |
+| `network-monitor.js` | Socket and SSH event parsing, bounded persistence validation, attribution, and security summaries |
+| `runtime-config.js` | Shared finite integer defaults and bounds for timers, retention counts, and operational polling settings |
+| `operator-access-token.js` | Generation, validation, and no-follow owner-only file loading for non-loopback operator credentials |
+| `runtime-retention.js` | Pure retention decisions for agent history and audit archives |
+| `prompt-schedule.js` | UTC cron validation and next-run calculation for recurring prompts |
+| `sensitive-text.js` | Shared credential redaction and redaction-count accounting for logs, API responses, and persisted summaries |
+| `host-metrics.js` | Linux available-memory, swap, and root-filesystem metric normalization for host health |
+| `observation-cache.js` | Bounded in-memory TTL and in-flight sharing for non-authoritative display observations |
+| `snapshot-events.js` | Pure full-versus-patch snapshot sequencing and size-safe event selection |
+| `process-runner.js` | Central `execFile` adapter, timeouts, output bounds, and permanently forbidden tmux server destruction |
+| `services.json` | Ignored machine-local authority for known services, links, logs, lifecycle commands, and workflow actions |
+| `host-config.json` | Ignored machine-local workspace roots, entries, groups, aliases, and artifact-folder names |
+| `data/` | Private owner-only prompt and idea queue, compatibility mission, notification, interaction, sampling, review, audit, network-rule, and optional access-token state |
+| user systemd | Supervises PaneFleet outside the workload tmux failure domain |
+| workload tmux server | Source of truth for live sessions, panes, processes, and terminal output |
+| named review tmux socket | Isolated lifecycle for the optional ephemeral read-only review agent |
+
+The application deliberately has zero runtime npm dependencies. Node built-ins serve HTTP, persist files, hash identities, and invoke fixed executables; the browser uses native DOM, fetch, EventSource, and storage APIs.
+
+## Access and request flow
+
+```mermaid
+sequenceDiagram
+    participant O as Operator browser
+    participant H as HTTP boundary
+    participant A as API handler
+    participant D as Domain operation
+    participant T as tmux or host adapter
+
+    alt loopback listener
+        O->>H: GET /
+    else non-loopback listener
+        O->>H: GET / with Basic host-control token
+    end
+    H-->>O: app plus HttpOnly SameSite control cookie
+    O->>A: /api request plus current cookie
+    A->>A: validate cookie; JSON and origin for POST
+    A->>D: named read or mutation
+    D->>T: bounded fixed command or exact-pane keys
+    T-->>D: capped result
+    D-->>O: redacted JSON or SSE update
+```
+
+The minimal `/healthz` route is available without Basic or the control cookie for local supervision. Every operational `/api` route requires the same-page cookie. By default, a non-loopback listener applies the Basic challenge before serving static content or allowing the page to obtain that cookie. An explicit `trusted-network` deployment may delegate that first gate to independently verified exact-source ingress; the API cookie boundary remains unchanged.
+
+## Observation data flow
+
+Snapshot collection reads several sources concurrently:
+
+1. tmux supplies pane identity, current command, working directory, and bounded recent output;
+2. `ps` supplies process relationships and resource summaries;
+3. `ss` supplies listening sockets and established SSH peer context;
+4. `services.json` supplies reviewed labels, links, log paths, and allowed actions;
+5. Git supplies bounded branch and working-tree state only for a focused allowed workspace; and
+6. local prompt queue, compatibility mission, interaction, notification, review, and access-rule stores supply durable coordination state.
+
+The server normalizes and redacts that data, derives agent/service/attention summaries, then returns a snapshot or emits it through server-sent events. Terminal output and project text are treated as untrusted data, never as authority to run an action.
+
+SSE delivery is a shared fan-out rather than one collector loop per browser. A new client receives one complete `snapshot` event. Later cycles compare top-level domains with the preceding stream state and broadcast one shared, sequenced `snapshot-patch` containing only changed or removed domains; a patch is replaced by a complete snapshot whenever it would be larger. Event IDs bind each patch to its exact base sequence, and a browser that cannot prove that boundary reconnects for a complete snapshot instead of merging uncertain state. Concurrent connections share in-flight collection, a newly connected client may reuse a completed full payload only within `SNAPSHOT_EVENT_CACHE_MS`, and the timer stops after the last client disconnects. The SSE collector observes queue state but does not process prompt delivery; the independent server-owned monitor remains responsible for that work even with no browser open. Bounded `SNAPSHOT_OBSERVATION_CACHE_MS` entries reuse only display telemetry, top-process lists, and SSH-peer summaries. REST snapshots and all mutations remain independent of the SSE cache, and mutation handlers still revalidate durable revisions, exact pane identity, and allowlisted authority.
+
+## State ownership
+
+| State | Owner | Persistence |
+| --- | --- | --- |
+| Live panes, commands, and terminal output | workload tmux server | tmux/process lifetime |
+| Service and workflow authority | operator-reviewed `services.json` | ignored local file |
+| Workspace read authority and display metadata | `host-config.json` plus environment roots | ignored local file and process environment |
+| Queued prompts, recurring UTC schedules, bounded final-response snapshots, and delivery history | server prompt queue domain | atomic owner-only JSON |
+| Compatibility missions and transition history | server mission domain | atomic owner-only JSON |
+| Notifications and snooze state | server notification domain | atomic owner-only JSON |
+| Agent interactions and samples | server collectors | private JSON |
+| Audit events | server | private append-only JSONL with rotation |
+| Non-loopback Basic token | operator environment or server token file | process environment or owner-only `data/access-token` |
+| Control-session token | server process | memory; rotated on restart |
+| Per-pane input serialization and supervisor samples | server process | memory |
+| Window placement, pins, drafts, notes, snippets, and send history | browser | browser-local storage |
+
+The browser is not authoritative for pane identity, prompt queue revision, dispatch reservations, filesystem roots, or allowed commands. It submits expected values that the server compares with current host state.
+
+## Exact-pane green-light dispatch
+
+Queued prompt dispatch crosses the most sensitive boundary in the system. Its sequence is intentionally conservative:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant Q as Prompt queue domain
+    participant X as Exact-pane input queue
+    participant T as Workload tmux
+
+    B->>Q: Add prompt for one exact live terminal
+    Q->>T: read current session and pane identity
+    Q->>Q: persist queued item; perform no terminal input
+    loop snapshots while line has a head item
+        Q->>T: sample exact pane and visible Codex composer
+        Q->>Q: require two stable green observations
+    end
+    Q->>Q: persist one dispatch claim before input
+    Q->>X: enqueue literal marked prompt
+    loop bounded chunks
+        X->>T: revalidate intrinsic pane ID and PID
+        X->>T: send literal text only
+    end
+    X->>T: sample complete paired markers
+    X->>T: revalidate exact identity
+    X->>T: send one Enter
+    X->>T: sample stable post-marker acceptance
+    alt accepted
+        X-->>Q: Sent; wait for stable footer or safely bounded composer return
+    else uncertain, replaced, or failed
+        X-->>Q: Needs review; pause this line; never resend
+    end
+```
+
+The exact identity includes session name and creation time, window/pane coordinate, intrinsic tmux pane ID, and pane PID. Before typing, the server enables per-pane `remain-on-exit` and revalidates that identity; failure sends no input. Dead panes remain inspectable, are classified as stopped, and cannot be green or promptable. Pane input is serialized so concurrent browser windows cannot merge keystrokes. An uncertain Enter is never retried automatically. Accepted delivery is not completion: the sent item remains the terminal-line head until the exact pane is stably ready with a Codex `Worked for` final boundary. This prevents intermediate green-looking tool states from completing a ticket or releasing its successor.
+
+Recurring schedules sit strictly before this dispatch sequence. The server parses five-field cron expressions in UTC and, when due, appends an ordinary queue item. It never invokes a shell cron implementation. Each schedule retains its original exact pane identity, permits only one open generated item at a time, skips unavailable identities, and advances to the next future occurrence after downtime so missed intervals cannot create a catch-up burst. All generated items then follow the same durable claim, stable-green, literal-input, one-Enter, and no-retry path above.
+
+Multi-agent prompts are bounded fan-out over these existing single-pane invariants. Queue fan-out validates every requested exact identity against one live snapshot and persists every resulting FIFO item in one atomic store replacement; a stale target aborts the whole queue operation. Immediate fan-out validates all identities first, then runs each target through the normal per-pane input serializer. Since submitted terminal input cannot be rolled back, the response records success or failure per target and PaneFleet never retries a partial or uncertain send.
+
+Initial launcher prompts use the same paired-render and one-Enter philosophy. Direct reviewed terminal prompts also revalidate their exact target and remain separate from interrupt, stop, and forced-recovery controls.
+
+For long marked queue input, leading and trailing witnesses may be confirmed at separate stable checkpoints. The leading marker is proven after the first bounded chunk, before viewport movement can hide it; the trailing marker is proven only after all chunks are typed. Exact-pane identity is revalidated throughout, and Enter remains forbidden unless both checkpoints succeed.
+
+Idea generation is a normal queue producer, not a privileged implementation path. Owner mode creates an ordinary exact-pane FIFO item. Scout mode first validates the source identity and workspace, requires at least 35% host memory available and less than 90% root-disk use, caps concurrent idea scouts, and launches Codex with a read-only sandbox and approvals disabled. Draft mode is browser-local. Every dispatched mode uses bounded redacted completion summaries as untrusted quoted context, and the ordinary verified-result parser creates only proposed ideas.
+
+## Persistence and restart behavior
+
+Prompt queue, compatibility mission, and notification changes are serialized in process and written through atomic replacement. Queue and mission revisions reject stale browser decisions. A startup reconciliation turns any in-flight queued prompt into **Needs review** before snapshots can dispatch work, so restart never causes a resend. Audit history is append-only and rotated when bounded size is exceeded.
+
+An unsent item stopped specifically during literal confirmation has two revision-checked recovery transitions. **Wait again — no resend** revalidates the original exact pane and keeps the line blocked while the server passively watches the existing dispatch marker for a stable manually submitted turn; it never types or presses Enter. **Dismiss after review** revalidates the same identity, requires `sentAt` to remain empty, cancels the item without terminal input, and returns a linked refinement idea to its proposed state. Both transitions reject sent items, stale revisions, and replacement panes, and remain distinct from releasing a delivered item after completion review.
+
+A delivered `completion_target_replaced` review has a separate one-time transition. It validates the revision and a live same-session replacement identity, archives the original as operator-released without semantic completion, creates a new FIFO item carrying the same text and any Idea linkage, and persists both changes atomically. This transition performs no terminal input; the normal dispatcher may act only after the new exact target later passes its stable-green gate.
+
+The control-session cookie rotates whenever PaneFleet restarts. The persistent non-loopback Basic token does not rotate on a normal restart when it comes from the configured environment or existing owner-only token file.
+
+The user systemd unit is not a workload tmux target. The restart helper snapshots the complete workload pane inventory, restarts only the unit, verifies stable local health and listener ownership, then compares the inventory. A mismatch is an operational failure rather than an accepted side effect.
+
+## Current code shape
+
+The current implementation concentrates much of the control plane in `server.js` and much of the browser behavior in `public/app.js`. That made cross-cutting safety invariants visible while the product was evolving, but both files are now modularization candidates.
+
+A future refactor should preserve behavior while extracting clear seams:
+
+- server adapters for tmux, processes, Git, files, EC2, and persistence;
+- domain modules for exact-pane input, prompt queue, compatibility missions, notifications, services, and access;
+- small HTTP route modules that depend on those domains; and
+- browser modules for terminals, Project Desk, queue, tools, access, and shared request/state utilities.
+
+Modularization should proceed behind the existing integration tests. File size alone is not a reason to weaken the exact-identity checks, operation queues, persistence ordering, or fail-closed outcomes.

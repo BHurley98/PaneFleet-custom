@@ -1,0 +1,43 @@
+export const TEST_SUITES = Object.freeze({
+  core: Object.freeze([
+    'test/process-runner.test.js',
+    'test/test-helpers.test.js',
+    'test/test-runner.test.js',
+    'test/codex-telemetry.test.js',
+    'test/durable-json.test.js',
+    'test/host-metrics.test.js',
+    'test/observation-cache.test.js',
+    'test/trusted-proxy.test.js',
+    'test/snapshot-events.test.js',
+    'test/network-monitor.test.js',
+    'test/runtime-retention.test.js',
+    'test/runtime-config.test.js',
+    'test/site-onboarding.test.js',
+    'test/operator-access-token.test.js',
+    'test/prompt-schedule.test.js',
+    'test/sensitive-text.test.js',
+    'test/network-auth.test.js',
+    'test/lifecycle-safety.test.js',
+    'test/server-smoke.test.js',
+    'test/persisted-state-validation.test.js',
+    'test/agent-create-prompt.test.js',
+    'test/mission-queue.test.js',
+    'test/operator-controls.test.js',
+    'test/ip-cleanup-safety.test.js',
+    'test/ip-rules-integration.test.js'
+  ]),
+  features: Object.freeze([
+    'test/agent-create-ui.test.js',
+    'test/mobile-ui-cascade.test.js',
+    'test/host-https-bundle.test.js',
+    'test/host-security-hardening.test.js',
+    'test/host-config-validation.test.js',
+    'test/privacy-check.test.js',
+    'test/project-desk.test.js',
+    'test/readme-assets.test.js',
+    'test/service-config-validation.test.js',
+    'test/terminal-full-height.test.js',
+    'test/test-suite-manifest.test.js',
+    'test/ui-shell.test.js'
+  ])
+});

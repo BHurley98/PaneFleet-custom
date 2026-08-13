@@ -1,0 +1,24 @@
+## Approval-gated bounded audit policy for the private PaneFleet host.
+## Replaces Amazon Linux's performance-only never,task policy. It observes
+## configuration writes without high-volume process or network syscall rules.
+-D
+-b 1024
+--backlog_wait_time 60000
+-f 1
+
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k privilege_scope
+-w /etc/sudoers.d -p wa -k privilege_scope
+-w /etc/ssh -p wa -k ssh_configuration
+-w /etc/systemd/system -p wa -k system_services
+-w @OPERATOR_HOME@/.config/systemd/user -p wa -k user_services
+-w /etc/sysctl.conf -p wa -k kernel_configuration
+-w /etc/sysctl.d -p wa -k kernel_configuration
+-w /etc/audit -p wa -k audit_configuration
+-w /etc/caddy -p wa -k edge_configuration
+-w @OPERATOR_HOME@/.ssh -p wa -k authorized_keys
+-w /root/.ssh -p wa -k authorized_keys
+-w @DROP_HOME@/.ssh -p wa -k authorized_keys

@@ -1,0 +1,34 @@
+[Unit]
+Description=Locked companion background worker
+After=network-online.target companion-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@COMPANION_ROOT@
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=COMPANION_DB_PATH=@COMPANION_ROOT@/.data/app.sqlite
+Environment=HOME=%h
+Environment=CODEX_HOME=%h/.codex
+Environment=PATH=@NODE_BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/flock -n @COMPANION_ROOT@/.data/worker.lock @NODE_BIN_DIR@/npm run worker
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+LockPersonality=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=@COMPANION_ROOT@/.data %h/.codex %h/.cache
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,196 @@
+# Configuration
+
+PaneFleet separates reusable source from machine-local authority. Two ignored files provide host-specific configuration:
+
+- `services.json` grants visibility and allowlisted service actions; and
+- `host-config.json` adds workspace roots, workspace entries, display groups, display aliases, and PDF artifact folders.
+
+The files behave differently: `services.json` must exist and may contain an empty array, while a missing `host-config.json` is treated as an empty object. Never place credentials in either file.
+
+## Host configuration
+
+Start from the sanitized schema example when the default `~/projects` root is not enough:
+
+```bash
+cp host-config.example.json host-config.json
+```
+
+The entire file is ignored by Git. Unknown top-level keys and malformed values fail startup instead of being silently ignored.
+
+Example shape:
+
+```json
+{
+  "additionalWorkspaceRoots": [
+    {
+      "path": "/srv/shared-workspaces",
+      "label": "Shared workspaces",
+      "group": "Additional roots"
+    }
+  ],
+  "workspaceEntries": [
+    {
+      "path": "/srv/shared-workspaces/example-tooling",
+      "label": "Example tooling",
+      "group": "Project tools"
+    }
+  ],
+  "directoryGroups": {
+    "docs": "Supporting folders"
+  },
+  "areaAliases": [
+    {
+      "path": "/srv/shared-workspaces/example-tooling",
+      "label": "Example Tooling"
+    }
+  ],
+  "artifactDirectories": ["releases"]
+}
+```
+
+| Key | Shape | Purpose |
+| --- | --- | --- |
+| `additionalWorkspaceRoots` | descriptor array | Adds canonical roots that Project Desk and workspace selection may read |
+| `workspaceEntries` | descriptor array | Adds specific selectable workspaces inside an allowed root |
+| `directoryGroups` | object | Maps immediate directory names under the primary project root to UI group labels |
+| `areaAliases` | descriptor array | Assigns display names to a path and its descendants; the longest matching path wins |
+| `artifactDirectories` | name array | Adds allowed output-folder names to the built-in set |
+
+A workspace descriptor may be an absolute path string or an object with:
+
+- `path`: required absolute path;
+- `label`: optional display label; and
+- `group`: optional workspace-picker group.
+
+`workspaceEntries` and `areaAliases` must be inside the primary root or one of `additionalWorkspaceRoots`. They do not expand filesystem authority. Labels and groups are display metadata only.
+
+`directoryGroups` keys and `artifactDirectories` values are single directory names, not paths. PDF and HTML discovery recognizes top-level `artifacts`, `deliverables`, `exports`, `output`, and `public` folders plus names explicitly listed here. Project Desk also discovers root-level PDF, Markdown, and HTML files created or modified during the focused exact tmux session, while excluding instruction and repository-metadata names. Both paths remain bounded, symlink-aware, download-only, and tied to the focused exact pane. HTML previews are limited to reviewed output folders; root session HTML remains downloadable but is not executable in the preview sandbox.
+
+## Service registry
+
+Create a local registry:
+
+```bash
+cp services.example.json services.json
+```
+
+Each top-level entry describes one known service or workflow.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | Unique stable identifier using letters, numbers, `.`, `_`, `:`, or `-` |
+| `label` | no | Human-readable name; defaults to `id` |
+| `cwd` | yes | Absolute service workspace path |
+| `session` | with `command` | Exact tmux session managed by Start/Stop/Restart |
+| `command` | with `session` | Fixed command used to create the managed session |
+| `sessionPrefixes` | no | Tmux session prefixes associated with the service for visibility |
+| `ports` | no | Expected TCP listener ports |
+| `links` | no | Browser links derived from a registered port, protocol, and path |
+| `logFiles` | no | Bounded relative log paths inside `cwd` |
+| `actions` | no | Additional fixed allowlisted workflows |
+| `external` | no | Marks a visible service whose lifecycle is managed elsewhere |
+
+`session` and `command` must appear together. Omitting both creates a visibility/action entry without generic lifecycle controls.
+
+### Links
+
+A link contains:
+
+- `label`;
+- `port` from 1 to 65535;
+- optional `protocol`: `http`, `https`, or `exp`; and
+- optional `path` beginning with `/`.
+
+### Logs
+
+A log entry contains a label, a relative path inside the service workspace, and a line count from 20 to 300. Absolute paths and parent traversal are rejected. Log output remains private operational data.
+
+### Actions
+
+An action contains:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique action identifier within the service |
+| `label` | Operator-facing button text |
+| `command` | Fixed machine-local command from the reviewed registry |
+| `runMode` | `exec` for bounded foreground execution or `tmux` for a new session |
+| `safe` | Explicitly marks an unconfirmed action as non-destructive |
+| `confirm` | Requires visible browser confirmation |
+| `timeoutMs` | Integer from 1,000 to 300,000 milliseconds |
+| `publicIpEnv` | Optional uppercase environment variable that receives a validated public IPv4 address |
+
+Every action must either set `safe: true` or `confirm: true`. Tmux actions and actions receiving a public IP always require confirmation.
+
+Do not place secrets in `command`. Read them from the process environment or an external credential store.
+
+## Environment
+
+Common settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | HTTP bind address |
+| `PORT` | `8787` | HTTP and dashboard access port |
+| `CODEX_COMMAND` | `codex` | Codex CLI executable or fixed launch prefix |
+| `CODEX_HOME` | `~/.codex` | Model catalog and Codex configuration root |
+| `ORCHESTRATOR_PROJECTS_ROOT` | `~/projects` | Primary allowlisted project root |
+| `ORCHESTRATOR_AGENT_WORKSPACES_ROOT` | inside the project root | Additional managed agent-workspace root |
+| `ORCHESTRATOR_HOST_CONFIG` | repository `host-config.json` | Alternate ignored host-configuration path |
+| `ORCHESTRATOR_EXTRA_WORKSPACE_ROOTS` | unset | Additional roots separated by the platform path delimiter |
+| `ORCHESTRATOR_ACCESS_MODE` | `authenticated` | Use `trusted-network` to suppress non-loopback Basic only behind externally enforced exact-source ingress |
+| `ORCHESTRATOR_ACCESS_TOKEN` | unset | Explicit authenticated-mode Basic password; must contain at least 24 characters |
+| `ORCHESTRATOR_ACCESS_TOKEN_FILE` | `data/access-token` | Owner-only token generated/reused when authenticated non-loopback mode needs one |
+| `ORCHESTRATOR_SECURE_COOKIE` | unset | Set to `1` when the browser reaches PaneFleet over HTTPS |
+| `ORCHESTRATOR_TRUST_LOOPBACK_PROXY` | unset | Set to `1` only when PaneFleet binds to loopback behind the checked-in Caddy design; one exact proxy-overwritten IPv4 forwarding value is then accepted from a loopback peer |
+| `MISSION_LITERAL_CONFIRM_MS` | `15000` | Maximum wait for two stable captures of both literal-input witness markers before PaneFleet refuses to send Enter |
+| `PROMPT_QUEUE_READY_MIN_MS` | `4000` | Minimum separation between the two exact-pane green observations required before queued delivery |
+| `PROMPT_QUEUE_MONITOR_MS` | `5000` | Server-owned queue observation interval, including when no dashboard tab is open |
+| `MISSION_MAX_ACTIVE` | `3` | Compatibility mission global active cap |
+| `SNAPSHOT_EVENT_MS` | `5000` | Server-sent snapshot interval |
+| `SNAPSHOT_EVENT_CACHE_MS` | `1000` | Maximum age for reusing one serialized SSE snapshot for a newly connected client; concurrent clients also share in-flight collection |
+| `SNAPSHOT_OBSERVATION_CACHE_MS` | `15000` | Bounded TTL for non-authoritative Codex telemetry, top-process, and SSH-peer display observations; never used to authorize mutations |
+| `AGENT_SAMPLE_INTERVAL_MS` | `15000` | Agent history sampling interval |
+| `AGENT_SAMPLE_PERSIST_MS` | `15000` | Minimum interval between batched passive-history disk writes |
+| `AGENT_SAMPLE_RETENTION_DAYS` | `14` | Retention window for inactive agent histories; active exact sessions are preserved |
+| `AGENT_SAMPLE_SESSION_LIMIT` | `100` | Maximum stored session histories after inactive cleanup |
+| `AUDIT_MAX_BYTES` | `2097152` | Active audit size that triggers owner-only archive rotation |
+| `AUDIT_ARCHIVE_LIMIT` | `4` | Maximum retained audit archives |
+| `AUDIT_RETENTION_DAYS` | `30` | Maximum audit archive age |
+| `ORCHESTRATOR_SECURITY_GROUP_ID` | unset | Optional explicit EC2 security group target |
+
+`ORCHESTRATOR_RUNTIME_ROOT` is a test-harness setting only. The server honors it only when `NODE_ENV=test`; production always resolves its public assets, service registry, and data paths from the installed PaneFleet root.
+
+Timing variables used by prompt rendering, acceptance confirmation, and green-light stability exist primarily for deterministic tests and unusual terminals. Integer timing and count settings are floored and bounded; empty or non-finite values use the documented default. Keep production defaults unless a measured compatibility problem justifies a change.
+
+Values in `ORCHESTRATOR_EXTRA_WORKSPACE_ROOTS` must be absolute paths. On Linux, separate several roots with `:`. Host configuration is usually clearer when roots also need labels, groups, or aliases.
+
+The systemd installer has separate installation-time settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ORCH_BIND_HOST` | `127.0.0.1` | Bind address written into the installed unit |
+| `ORCH_PORT` | `8787` | Port written into the installed unit |
+| `ORCH_HEALTH_HOST` | `127.0.0.1` | Local address used for install/restart health checks |
+| `ORCH_SYSTEMD_UNIT` | `agent-orchestrator.service` | Validated user-unit name ending in `.service`; paths and option-like names are rejected |
+| `ORCH_NODE_BIN` | discovered `node` | Absolute Node executable written into the unit |
+
+Any non-loopback `ORCH_BIND_HOST` activates the Basic challenge at runtime by default. In that default authenticated mode, if no explicit token is injected into the installed service, first startup creates the owner-only token file. Retrieve it locally with:
+
+```bash
+bash scripts/show-access-token.sh
+```
+
+Use username `host-control` and the printed token. Never carry that credential over plain HTTP; use HTTPS or a private/tunneled transport.
+
+Prefer the generated owner-only token file. If a supervisor injects `ORCHESTRATOR_ACCESS_TOKEN`, use its protected secret mechanism rather than placing the token in a command line, unit file, repository file, or shell history.
+
+When an external firewall or cloud security group has been independently verified to allow the dashboard port only from the operator's exact IPv4 `/32`, an installation may deliberately set `ORCHESTRATOR_ACCESS_MODE=trusted-network`. This removes only the browser Basic prompt. The HttpOnly same-page control cookie, JSON requirement, origin checks, CSP, and all operation-specific validation remain active. Never use trusted-network mode with broad, ranged, shared, or unverified ingress.
+
+## Runtime data
+
+PaneFleet creates `data/` with prompt queue, idea queue, recurring schedule state, compatibility mission, notification, interaction, review, access-rule, and audit state. Ideas live in the same atomic queue store so approval can persist the idea decision and its new work ticket together. An authenticated non-loopback deployment without an injected token also stores `data/access-token` with owner-only permissions; trusted-network mode does not. State files use atomic replacement where consistency matters. Passive agent-history updates are batched, inactive histories are age/count bounded, and audit archives are age/count bounded without removing the active audit. Recurring schedules use UTC and the same server-owned `PROMPT_QUEUE_MONITOR_MS` loop; they do not install host cron entries.
+
+Treat `data/`, `services.json`, and `host-config.json` as private. Back them up only to a protected destination, never commit them, and stop PaneFleet before attempting a manual restore.
+
+Browser-local notes, prompt drafts, snippets, pins, and window preferences live in browser storage rather than `data/`.

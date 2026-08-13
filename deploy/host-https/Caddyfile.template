@@ -1,0 +1,59 @@
+{
+	admin 127.0.0.1:2019
+}
+
+(route53_tls) {
+	tls {
+		protocols tls1.2 tls1.3
+		dns route53 {
+			region {$AWS_REGION}
+			hosted_zone_id {$ROUTE53_HOSTED_ZONE_ID}
+		}
+	}
+}
+
+(private_response_headers) {
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+	request_body {
+		max_size 1MB
+	}
+}
+
+(trusted_backend_headers) {
+	header_up -Forwarded
+	header_up -CF-Connecting-IP
+	header_up -Fastly-Client-IP
+	header_up -Fly-Client-IP
+	header_up -True-Client-IP
+	header_up -X-Azure-ClientIP
+	header_up -X-Client-IP
+	header_up -X-Cluster-Client-IP
+	header_up X-Forwarded-For {remote_host}
+	header_up X-Real-IP {remote_host}
+}
+
+{$PANEFLEET_HTTPS_HOST} {
+	import route53_tls
+	import private_response_headers
+	reverse_proxy 127.0.0.1:8787 {
+		import trusted_backend_headers
+		stream_close_delay 5m
+	}
+}
+
+{$COMPANION_HTTPS_HOST} {
+	import route53_tls
+	import private_response_headers
+	reverse_proxy 127.0.0.1:8104 {
+		import trusted_backend_headers
+	}
+}
+
+# Access logging is intentionally not enabled.

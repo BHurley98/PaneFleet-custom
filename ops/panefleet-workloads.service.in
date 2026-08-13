@@ -1,0 +1,22 @@
+[Unit]
+Description=PaneFleet workload tmux isolation anchor
+Documentation=file://@ROOT@/docs/operations.md
+Before=agent-orchestrator.service
+
+[Service]
+Type=simple
+ExitType=cgroup
+WorkingDirectory=@ROOT@
+Environment=CODEX_HOME=@HOME@/.codex
+Environment=TMUX=
+Environment=TMUX_PANE=
+Environment="PATH=@NODE_DIR@:@HOME@/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin"
+ExecStart=@ROOT@/scripts/workload-tmux-anchor.sh
+KillMode=control-group
+OOMPolicy=continue
+TimeoutStopSec=15
+UMask=0077
+SyslogIdentifier=panefleet-workloads
+
+[Install]
+WantedBy=default.target

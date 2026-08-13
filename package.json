@@ -1,0 +1,36 @@
+{
+  "name": "panefleet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Safety-first control room for tmux-based AI coding agents and allowlisted developer services.",
+  "license": "MIT",
+  "keywords": [
+    "ai-agents",
+    "codex",
+    "developer-tools",
+    "operations",
+    "self-hosted",
+    "terminal",
+    "tmux"
+  ],
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scripts/run-tests.mjs all",
+    "test:core": "node scripts/run-tests.mjs core",
+    "test:features": "node scripts/run-tests.mjs features",
+    "test:coverage": "c8 --clean --all --reporter=text --reporter=json-summary --include=server.js --include=codex-telemetry.js --include=durable-json.js --include=host-metrics.js --include=observation-cache.js --include=trusted-proxy.js --include=snapshot-events.js --include=network-monitor.js --include=runtime-config.js --include=site-onboarding.js --include=operator-access-token.js --include=runtime-retention.js --include=prompt-schedule.js --include=process-runner.js --include=sensitive-text.js --include=public/ui-state.js --check-coverage --per-file --statements=96 --branches=81 --functions=100 --lines=96 npm test",
+    "check:shell": "bash -n scripts/*.sh .githooks/pre-commit",
+    "check": "npm run check:shell && node --check server.js && node --check codex-telemetry.js && node --check durable-json.js && node --check host-metrics.js && node --check observation-cache.js && node --check trusted-proxy.js && node --check snapshot-events.js && node --check network-monitor.js && node --check runtime-config.js && node --check site-onboarding.js && node --check operator-access-token.js && node --check runtime-retention.js && node --check prompt-schedule.js && node --check process-runner.js && node --check sensitive-text.js && node --check public/app.js && node --check public/theme-bootstrap.js && node --check public/ui-state.js && node --check scripts/plan-private-site.mjs && node --check scripts/run-tests.mjs && node --check scripts/test-suites.mjs && node --check scripts/privacy-check.mjs && node --check scripts/capture-readme-screenshots.mjs && npm run test:coverage && npm run privacy:check",
+    "screenshots:readme": "node scripts/capture-readme-screenshots.mjs",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "privacy:check": "node scripts/privacy-check.mjs --worktree --history",
+    "verify:public": "npm run check"
+  },
+  "engines": {
+    "node": ">=22.23.0 <23"
+  },
+  "devDependencies": {
+    "c8": "^11.0.0"
+  }
+}
