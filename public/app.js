@@ -5197,6 +5197,7 @@ function createTerminalWindow({ session = null, mode = 'static', lines = 120, pa
         <button data-action="terminal-command" data-command="/usage" type="button">Usage</button>
         <button data-action="terminal-command" data-command="/fast" type="button" title="Toggle fast mode">Fast</button>
         <button class="picker-toggle" data-action="terminal-picker-toggle" type="button" aria-expanded="false" title="Show controls for an already-open model picker">Picker</button>
+        <button data-action="agent-rename" data-session="${escapeHtml(session || '')}" type="button" title="Rename this agent in PaneFleet; the tmux session ID stays the same">Rename</button>
       </span>
       <span class="terminal-tool-group terminal-recovery-tools" role="group" aria-label="Session recovery">
         <span class="terminal-tool-group-label" aria-hidden="true">Recovery</span>
