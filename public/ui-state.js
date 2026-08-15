@@ -320,8 +320,9 @@ export function modalFocusIndex(event, currentIndex, count) {
 export function preferredDashboardView(hash, storedView) {
   const hashView = String(hash || '').replace(/^#/, '').toLowerCase();
   if (hashView === 'queue') return 'queue';
+  if (hashView === 'usage') return 'usage';
   if (hashView === 'terminals' || hashView === 'agents') return 'agents';
-  return storedView === 'queue' ? 'queue' : 'agents';
+  return ['queue', 'usage'].includes(storedView) ? storedView : 'agents';
 }
 
 export function dashboardDocumentTitle({
@@ -332,7 +333,7 @@ export function dashboardDocumentTitle({
   workingCount = 0,
   connection = 'live'
 } = {}) {
-  const section = drawer === 'tools' ? 'Tools' : view === 'queue' ? 'Queue' : 'Terminals';
+  const section = drawer === 'tools' ? 'Tools' : view === 'queue' ? 'Queue' : view === 'usage' ? 'Usage' : 'Terminals';
   if (connection === 'error') return `Offline · ${section} — PaneFleet`;
   if (connection === 'poll') return `Polling · ${section} — PaneFleet`;
   if (Number(decisionCount) > 0) return `Needs you: ${Math.floor(Number(decisionCount))} · ${section} — PaneFleet`;

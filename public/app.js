@@ -936,6 +936,7 @@ function guardedDashboardRender(label, renderSection) {
 function render({ preserveActiveEditor = false } = {}) {
   const data = state.snapshot;
   if (!data) return;
+  window.dispatchEvent(new CustomEvent('panefleet:snapshot', { detail: { snapshot: data } }));
   state.clientRenderError = '';
   syncRuntimeVersion(data.runtimeVersion);
   const activeElement = document.activeElement;
@@ -8547,8 +8548,9 @@ function syncDecisionAppBadge(decisionCount) {
 
 function syncWorkspaceHeading() {
   const queueActive = state.activeView === 'queue';
-  els.workspaceEyebrow.textContent = queueActive ? 'Safe delivery queue' : 'Terminal-first control';
-  els.workspaceTitle.textContent = queueActive ? 'Prompt Queue' : 'Agent workspace';
+  const usageActive = state.activeView === 'usage';
+  els.workspaceEyebrow.textContent = queueActive ? 'Safe delivery queue' : usageActive ? 'Telemetry & quotas' : 'Terminal-first control';
+  els.workspaceTitle.textContent = queueActive ? 'Prompt Queue' : usageActive ? 'Multi-agent usage' : 'Agent workspace';
   const snapshot = state.snapshot;
   const attention = snapshot ? normalizedAttention(snapshot) : { items: [], decisionCount: 0 };
   const decisionCount = dashboardSectionDecisionCount({
@@ -8587,12 +8589,12 @@ function switchView(view, { focusTab = false, persist = true } = {}) {
     if (view !== 'system') window.requestAnimationFrame(() => document.querySelector(`#${view}-view`)?.scrollIntoView({ behavior: motionAwareScrollBehavior(), block: 'start' }));
     return;
   }
-  if (!['agents', 'queue'].includes(view)) return;
+  if (!['agents', 'queue', 'usage'].includes(view)) return;
   setOpenDrawer(null);
   state.activeView = view;
   syncWorkspaceFocus();
   if (persist) safeStorageSet(ACTIVE_VIEW_STORAGE_KEY, view);
-  const nextHash = view === 'queue' ? '#queue' : '#terminals';
+  const nextHash = view === 'queue' ? '#queue' : view === 'usage' ? '#usage' : '#terminals';
   if (window.location.hash !== nextHash) window.history.replaceState(null, '', nextHash);
   syncWorkspaceHeading();
   const selectedTab = document.querySelector(`#${view}-tab`);
@@ -8608,6 +8610,7 @@ function switchView(view, { focusTab = false, persist = true } = {}) {
     panel.hidden = !selected;
   }
   if (focusTab) selectedTab.focus({ preventScroll: true });
+  window.dispatchEvent(new CustomEvent('panefleet:view-change', { detail: { view, snapshot: state.snapshot } }));
 }
 
 function openServiceDetail(serviceId) {
@@ -8648,7 +8651,7 @@ function nextAgentNameForWorkspace(workspace) {
 function openNewAgentLauncher(requestedWorkspace = '') {
   closeShortcutHelp({ focus: false });
   setOpenDrawer(null, { focus: false });
-  if (state.activeView !== 'agents') switchView('agents', { persist: true });
+  if (state.activeView !== 'agents' || document.querySelector('#agents-view')?.hidden) switchView('agents', { persist: true });
   const workspace = launcherWorkspaceForProject(requestedWorkspace);
   state.agentDraft = {
     ...state.agentDraft,
@@ -9401,6 +9404,9 @@ els.refresh.addEventListener('click', () => Promise.all([
   loadSnapshot('manual'),
   loadOptions()
 ]));
+window.addEventListener('panefleet:refresh-snapshot', () => loadSnapshot('manual')
+  .then(() => window.dispatchEvent(new CustomEvent('panefleet:refresh-complete', { detail: { snapshot: state.snapshot } })))
+  .catch((error) => setNotice(`Usage refresh failed: ${error.message}`, 'error')));
 window.addEventListener('resize', scheduleTerminalViewportResize);
 window.visualViewport?.addEventListener('resize', scheduleTerminalViewportResize);
 window.addEventListener('hashchange', () => {

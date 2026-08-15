@@ -203,7 +203,8 @@ test('live entrypoint loads the terminal-first shell', async () => {
   assert.match(index, /data-action="session-filter" data-filter="needs"/);
   assert.match(index, /id="agents-tab"[^>]*aria-keyshortcuts="Alt\+1"/);
   assert.match(index, /id="queue-tab"[^>]*aria-keyshortcuts="Alt\+2"/);
-  assert.match(index, /id="tools-tab"[^>]*aria-keyshortcuts="Alt\+3"/);
+  assert.match(index, /id="usage-tab"[^>]*data-view="usage"[^>]*aria-keyshortcuts="Alt\+3"/);
+  assert.match(index, /id="tools-tab"[^>]*aria-keyshortcuts="Alt\+4"/);
   assert.match(index, /id="workspace-eyebrow" class="eyebrow">Terminal-first control/);
   assert.match(index, /id="workspace-title">Agent workspace/);
   assert.match(index, /id="connection-pill"[^>]*data-state="init"[^>]*role="status"[^>]*aria-live="polite"/);
@@ -861,9 +862,11 @@ test('Tools traps modal focus and Escape restores the opening control', async ()
 
 test('dashboard view preference honors deep links before durable local selection', () => {
   assert.equal(preferredDashboardView('#queue', 'agents'), 'queue');
+  assert.equal(preferredDashboardView('#usage', 'agents'), 'usage');
   assert.equal(preferredDashboardView('#terminals', 'queue'), 'agents');
   assert.equal(preferredDashboardView('#agents', 'queue'), 'agents');
   assert.equal(preferredDashboardView('#unknown', 'queue'), 'queue');
+  assert.equal(preferredDashboardView('', 'usage'), 'usage');
   assert.equal(preferredDashboardView('', 'agents'), 'agents');
   assert.equal(preferredDashboardView(null, 'invalid'), 'agents');
 });
