@@ -2679,6 +2679,13 @@ function antigravityWorkVisible(output) {
     /^\s*(?:[•◦]\s*)?(?:working|thinking|generating|processing)\b.*\besc to (?:stop|interrupt)\b/im.test(recent);
 }
 
+function antigravityNeedsInputVisible(output) {
+  const recent = lastOutputSnippet(output, 48);
+  return /\b(?:file access|allow access to (?:this )?(?:file|directory)|permission (?:required|requested))\b/i.test(recent) ||
+    /\b(?:yes, allow|yes, and always allow|no, deny)\b/i.test(recent) ||
+    /(?:↑|\^)[/↓v]\s*(?:Navigate|Choose)/i.test(recent) && /\besc to cancel\b/i.test(recent);
+}
+
 function serviceConfigError(location, message) {
   throw new Error(`services.json ${location}: ${message}`);
 }
@@ -3555,6 +3562,9 @@ function inferAgentStatus(agent, preview) {
   const usefulRecent = usefulOutputLines(`${preview?.lastOutput || ''}\n${preview?.lastLine || ''}`).slice(-8).join('\n').toLowerCase();
   const textValue = usefulRecent || rawRecent;
   const cpu = agent.primaryProcess?.cpu || 0;
+  if (agent.provider === 'antigravity' && antigravityNeedsInputVisible(preview?.output || '')) {
+    return { state: 'waiting', tone: 'warn', reason: 'Antigravity needs permission or input' };
+  }
   if (agent.provider === 'antigravity' && antigravityWorkVisible(preview?.output || '')) {
     return { state: 'busy', tone: 'good', reason: 'Antigravity generation active' };
   }
@@ -3574,6 +3584,9 @@ function inferAgentStatus(agent, preview) {
   }
   if (cpu >= 5 || /running|executing|installing|building|testing|searching|reading|applying patch|checking|thinking/.test(textValue)) {
     return { state: 'busy', tone: 'good', reason: cpu >= 5 ? `cpu ${cpu.toFixed(1)}%` : 'active output' };
+  }
+  if (agent.provider === 'antigravity' && cpu >= 0.5) {
+    return { state: 'busy', tone: 'good', reason: `Antigravity cpu ${cpu.toFixed(1)}%` };
   }
   if (agent.attached) return { state: 'attached', tone: 'good', reason: 'client attached' };
   if (cpu < 0.5) return { state: 'idle', tone: 'warn', reason: 'low cpu' };
@@ -5643,6 +5656,7 @@ function todayAttentionSnapshot({ missions, agents, orchestration, services, sec
     const tone = String(agent.agentStatus?.tone || 'warn').toLowerCase();
     if (!['waiting', 'stopped', 'needs review', 'error', 'missing'].includes(state) && tone !== 'bad') continue;
     const brief = agentBriefs.get(agent.session) || {};
+    const antigravityPermissionPrompt = agent.provider === 'antigravity' && /permission or input/i.test(agent.agentStatus?.reason || '');
     push({
       id: `attention:agent:${agent.session}:${state.replace(/\s+/g, '-')}`,
       dedupeKey: `agent:${agent.session}`,
@@ -5650,7 +5664,9 @@ function todayAttentionSnapshot({ missions, agents, orchestration, services, sec
       session: agent.session,
       paneId: agent.id,
       title: brief.displayName || agent.session,
-      detail: brief.nextAction || brief.stateText || agent.agentStatus?.reason || `Agent is ${state}.`,
+      detail: antigravityPermissionPrompt
+        ? 'Antigravity is waiting for a permission decision. Open the terminal, then choose Allow or Deny with its live controls.'
+        : brief.nextAction || brief.stateText || agent.agentStatus?.reason || `Agent is ${state}.`,
       status: state,
       tone: tone === 'bad' || state === 'stopped' ? 'bad' : 'warn',
       updatedAt: brief.checkedAt || at
