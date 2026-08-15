@@ -110,6 +110,7 @@ const state = {
   eventSource: null,
   eventRetryTimer: null,
   pollTimer: null,
+  antigravityUsageRefreshing: false,
   snapshotVersion: 0,
   snapshotRequestsInFlight: 0,
   selectionDeferredDomUpdates: new Map(),
@@ -162,13 +163,14 @@ const state = {
     notesDirty: false,
     sending: false
   },
-  options: { workspaces: [], promptPresets: [], models: [], configuredDefault: {}, reasoningEfforts: [], suggestedName: '' },
+  options: { workspaces: [], promptPresets: [], models: [], agentProviders: [], configuredDefault: {}, reasoningEfforts: [], suggestedName: '' },
   agentDraft: {
     open: false,
     name: '',
     directoryName: '',
     workspace: '__new__',
     preset: '',
+    provider: 'codex',
     model: '',
     reasoning: '',
     prompt: ''
@@ -2552,8 +2554,9 @@ function renderAgents(agents, orchestration) {
   const sessionScrollPositions = captureScrollPositions(els.sessionList, [':root']);
   const draft = state.agentDraft;
   const workspaceMode = draft.workspace && draft.workspace !== '__new__' ? 'existing' : 'new';
+  const provider = draft.provider || 'codex';
   const model = draft.model || '';
-  const reasoning = normalizedReasoning(model, draft.reasoning);
+  const reasoning = normalizedReasoning(model, draft.reasoning, provider);
   const createCard = `
     <article class="row-card create-card">
       <details class="new-agent-panel" ${draft.open ? 'open role="dialog" aria-modal="true"' : ''} aria-label="New Agent launcher">
@@ -2584,17 +2587,23 @@ function renderAgents(agents, orchestration) {
               ${presetSelectOptions(draft.preset)}
             </select>
           </label>
+          <label>
+            Provider
+            <select name="provider">
+              ${providerSelectOptions(provider)}
+            </select>
+          </label>
           <div class="model-settings">
             <label>
               Model
               <select name="model" data-model-select>
-                ${modelSelectOptions(model)}
+                ${modelSelectOptions(model, provider)}
               </select>
             </label>
             <label>
               Reasoning
               <select name="reasoning" data-reasoning-select>
-                ${reasoningSelectOptions(model, reasoning)}
+                ${reasoningSelectOptions(model, reasoning, provider)}
               </select>
             </label>
           </div>
@@ -2660,6 +2669,11 @@ function sessionRailItem(agent, orchestration) {
   const status = agent.agentStatus || { state: 'unknown', tone: 'warn' };
   const statusClass = statusClassName(status);
   const displayName = serviceSession ? agent.serviceLabel || agent.session : brief.displayName || agent.session;
+  const providerMark = agent.provider === 'codex'
+    ? '<span class="session-provider-mark codex" title="OpenAI Codex" aria-label="OpenAI Codex"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 16.5 5.8v5.1L12 13.5 7.5 10.9V5.8L12 3.2Zm0 7.1 4.5 2.6v5.1L12 20.6 7.5 18v-5.1l4.5-2.6Z"/><path d="m5.8 7 4.4 2.6v5.1L5.8 17.3l-4.4-2.6V9.6L5.8 7Zm12.4 0 4.4 2.6v5.1l-4.4 2.6-4.4-2.6V9.6L18.2 7Z"/></svg></span>'
+    : agent.provider === 'antigravity'
+      ? '<span class="session-provider-mark antigravity" title="Google Antigravity" aria-label="Google Antigravity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 2.1 7.9L22 12l-7.9 2.1L12 22l-2.1-7.9L2 12l7.9-2.1L12 2Z"/><circle cx="12" cy="12" r="2.1"/></svg></span>'
+      : '';
   const attention = sessionAttentionItems(agent.session);
   const decisions = attention.filter((item) => item.requiresDecision).length;
   const isOpen = [...state.terminalWindows.values()].some((item) => item.session === agent.session && item.mode !== 'static');
@@ -2678,7 +2692,7 @@ function sessionRailItem(agent, orchestration) {
     <article class="session-item ${escapeHtml(statusClass)} ${isOpen ? 'is-open' : ''} ${pinned ? 'is-pinned' : ''}" data-session="${escapeHtml(agent.session)}" data-session-search="${escapeHtml(searchValue)}" data-session-filter="${escapeHtml(filterCategory)}">
       <button class="session-open" data-action="${serviceSession ? 'peek' : 'agent-detail'}" data-session="${escapeHtml(agent.session)}" type="button" aria-label="Open ${escapeHtml(displayName)} terminal. ${escapeHtml(signal.label)}. ${escapeHtml(lastUsed)}">
         <span class="session-state-dot" aria-hidden="true"></span>
-        <span class="session-copy"><strong>${escapeHtml(displayName)}</strong><small>${escapeHtml(shortPath(agent.currentPath))}</small><span class="session-meta"><span class="session-signal ${escapeHtml(signal.tone)}" title="${escapeHtml(signal.description)}">${escapeHtml(signal.label)}</span><em>${escapeHtml(lastUsed)}</em></span>${taskPreview ? `<span class="session-task" title="${escapeHtml(taskPreview)}">${escapeHtml(taskPreview)}</span>` : ''}</span>
+        <span class="session-copy"><strong>${providerMark}${escapeHtml(displayName)}</strong><small>${escapeHtml(shortPath(agent.currentPath))}</small><span class="session-meta"><span class="session-signal ${escapeHtml(signal.tone)}" title="${escapeHtml(signal.description)}">${escapeHtml(signal.label)}</span><em>${escapeHtml(lastUsed)}</em></span>${taskPreview ? `<span class="session-task" title="${escapeHtml(taskPreview)}">${escapeHtml(taskPreview)}</span>` : ''}</span>
         ${attention.length ? `<span class="session-attention ${decisions ? 'decision' : ''}" title="${escapeHtml(`${attention.length} item${attention.length === 1 ? '' : 's'} need attention`)}">${decisions || attention.length}</span>` : ''}
       </button>
       <button class="session-pin ${pinned ? 'active' : ''}" data-action="session-pin" data-session="${escapeHtml(agent.session)}" type="button" aria-pressed="${pinned ? 'true' : 'false'}" aria-label="${escapeHtml(pin.actionLabel)}" title="${escapeHtml(pin.title)}"><span aria-hidden="true">${pin.symbol}</span><span class="session-pin-label" aria-hidden="true">${pin.visibleLabel}</span></button>
@@ -2896,6 +2910,40 @@ function codexTelemetryPanel(agent) {
   `;
 }
 
+function antigravityTelemetryPanel(agent) {
+  const output = `${agent?.summaryOutput || ''}\n${agent?.lastOutput || ''}`;
+  const accountMatch = output.match(/([\w.+-]+@[\w.-]+)\s*\((Google AI [^)]+)\)/i);
+  const modelMatch = output.match(/\b((?:Gemini|Claude|GPT)[^\n·]{0,80})\s*·\s*(low|medium|high)\b/i);
+  const weekly = output.match(/Weekly Limit Remaining[\s\S]{0,180}?(\d+(?:\.\d+)?)%\s*remaining[\s\S]{0,100}?Refreshes in\s*([^\n]+)/i);
+  const fiveHour = output.match(/Five Hour Limit Remaining[\s\S]{0,180}?(\d+(?:\.\d+)?)%\s*remaining[\s\S]{0,100}?Refreshes in\s*([^\n]+)/i);
+  const cached = (() => { try { return JSON.parse(safeStorageGet('panefleet:antigravity-usage', '{}')); } catch { return {}; } })();
+  const settings = (() => { try { return JSON.parse(safeStorageGet('panefleet:antigravity-usage-settings', '{"enabled":false,"minutes":15}')); } catch { return { enabled: false, minutes: 15 }; } })();
+  const model = modelMatch?.[1]?.trim() || 'Model not reported';
+  const effort = modelMatch?.[2] ? `${modelMatch[2]} effort` : 'Effort not reported';
+  const weeklyUsage = weekly ? { remainingPercent: weekly[1], refreshesIn: weekly[2].trim() } : cached.weekly;
+  const fiveHourUsage = fiveHour ? { remainingPercent: fiveHour[1], refreshesIn: fiveHour[2].trim() } : cached.fiveHour;
+  const account = accountMatch?.[1] || cached.account || 'Not reported';
+  const minutes = Math.max(5, Math.min(1440, Number(settings.minutes) || 15));
+  return `
+    <section class="inspector-usage good">
+      <div class="inspector-section-head"><strong>Antigravity session &amp; account</strong><span class="status good">Google</span></div>
+      <p class="inspector-usage-config">${escapeHtml(`${model} · ${effort} · default mode`)}</p>
+      <div class="inspector-usage-grid">
+        <div><span>Session context</span><strong>Not reported</strong><small>Antigravity’s interactive CLI does not currently expose a passive context-window counter.</small></div>
+        <div><span>Account</span><strong>${escapeHtml(account)}</strong><small>One configured Google account for this test instance</small></div>
+        <div><span>Weekly model limit</span><strong>${escapeHtml(weeklyUsage ? `${weeklyUsage.remainingPercent}% left` : 'Not refreshed')}</strong><small>${escapeHtml(weeklyUsage ? `resets in ${weeklyUsage.refreshesIn}` : 'Use Refresh usage to capture it')}</small></div>
+        <div><span>Five-hour model limit</span><strong>${escapeHtml(fiveHourUsage ? `${fiveHourUsage.remainingPercent}% left` : 'Not refreshed')}</strong><small>${escapeHtml(fiveHourUsage ? `resets in ${fiveHourUsage.refreshesIn}` : 'Use Refresh usage to capture it')}</small></div>
+        <div><span>Account plan</span><strong>${escapeHtml(accountMatch?.[2] || 'Not reported')}</strong><small>Shared across Antigravity sessions</small></div>
+      </div>
+      <div class="actions compact-actions"><button class="action-button" data-action="antigravity-usage-refresh" data-session="${escapeHtml(agent.session)}" type="button">Refresh usage</button><label>Auto refresh <input data-action="antigravity-usage-auto" type="checkbox" ${settings.enabled ? 'checked' : ''}></label><label>Every <input data-action="antigravity-usage-minutes" type="number" min="5" max="1440" value="${minutes}"> min</label></div>
+    </section>
+  `;
+}
+
+function providerTelemetryPanel(agent) {
+  return agent?.provider === 'antigravity' ? antigravityTelemetryPanel(agent) : codexTelemetryPanel(agent);
+}
+
 function terminalTelemetryMarkup(agent) {
   const telemetry = agent?.codexTelemetry;
   const presentation = codexTelemetryPresentation(telemetry);
@@ -2978,10 +3026,10 @@ function renderTerminalInspector(agents, orchestration) {
   const next = observationNextAction(brief, status, task);
   els.terminalInspector.innerHTML = `
     <div class="inspector-head"><div><span class="eyebrow">Selected agent</span><h2>${escapeHtml(brief.displayName || agent.session)}</h2><p>tmux ${escapeHtml(agent.session)} · ${escapeHtml(shortPath(agent.currentPath))}</p></div><span class="status ${escapeHtml(statusClassName(status))}">${escapeHtml(status.state)}</span></div>
-    <div class="inspector-actions"><button class="action-button primary" data-action="agent-detail" data-session="${escapeHtml(agent.session)}" type="button">Open</button>${canResume ? `<button class="action-button primary" data-action="agent-resume" data-session="${escapeHtml(agent.session)}" type="button" title="Run codex resume --last in this live shell">Restart Codex</button>` : ''}<button class="action-button" data-action="session-pin" data-session="${escapeHtml(agent.session)}" type="button" aria-pressed="${pinned ? 'true' : 'false'}">${pinned ? 'Unpin' : 'Pin to top'}</button><button class="action-button" data-action="copy-attach" data-session="${escapeHtml(agent.session)}" type="button">Copy attach</button></div>
+    <div class="inspector-actions"><button class="action-button primary" data-action="agent-detail" data-session="${escapeHtml(agent.session)}" type="button">Open</button>${canResume ? `<button class="action-button primary" data-action="agent-resume" data-session="${escapeHtml(agent.session)}" type="button" title="Run codex resume --last in this live shell">Restart Codex</button>` : ''}${agent.provider === 'antigravity' ? `<span class="inspector-section-head"><strong>Antigravity</strong><span>live controls</span></span><button class="action-button" data-action="antigravity-ui-key" data-session="${escapeHtml(agent.session)}" data-key="up" type="button">↑</button><button class="action-button" data-action="antigravity-ui-key" data-session="${escapeHtml(agent.session)}" data-key="down" type="button">↓</button><button class="action-button primary" data-action="antigravity-ui-key" data-session="${escapeHtml(agent.session)}" data-key="select" type="button">Select</button><button class="action-button" data-action="antigravity-ui-key" data-session="${escapeHtml(agent.session)}" data-key="cancel" type="button">Esc</button>` : ''}<button class="action-button" data-action="agent-rename" data-session="${escapeHtml(agent.session)}" type="button" title="Change the dashboard name; the tmux session ID stays the same">Rename</button><button class="action-button" data-action="session-pin" data-session="${escapeHtml(agent.session)}" type="button" aria-pressed="${pinned ? 'true' : 'false'}">${pinned ? 'Unpin' : 'Pin to top'}</button><button class="action-button" data-action="copy-attach" data-session="${escapeHtml(agent.session)}" type="button">Copy attach</button></div>
     ${attention.length ? `<section class="inspector-attention"><div class="inspector-section-head"><strong>Needs you</strong><span>${attention.length}</span></div>${attention.map((item) => `<button class="inspector-attention-item ${escapeHtml(item.tone)}" data-action="attention-open" data-attention-id="${escapeHtml(item.id)}" type="button"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></button>`).join('')}</section>` : ''}
     <section class="inspector-summary"><div><span>Current task</span><p>${escapeHtml(task)}</p></div><div><span>Last signal</span><p>${escapeHtml(activity)}</p></div><div><span>Next</span><p>${escapeHtml(next)}</p></div></section>
-    ${codexTelemetryPanel(agent)}
+    ${providerTelemetryPanel(agent)}
     ${mission ? `<section class="inspector-mission ${escapeHtml(missionTone(mission.status))}"><div class="inspector-section-head"><strong>Mission</strong><span>${escapeHtml(missionStatusLabel(mission.status))}</span></div><h3>${escapeHtml(mission.title)}</h3><p>${escapeHtml(mission.blocker || mission.goal)}</p><button class="action-button" data-action="mission-open-queue" data-mission-id="${escapeHtml(mission.id)}" type="button">Open in queue</button></section>` : ''}
     <details class="inspector-recovery"><summary>Recovery controls</summary><div><button class="action-button" data-action="peek" data-session="${escapeHtml(agent.session)}" type="button">Peek output</button><button class="action-button warn" data-action="interrupt-agent" data-session="${escapeHtml(agent.session)}" type="button">Send Ctrl-C</button><button class="action-button danger" data-action="session-stop" data-session="${escapeHtml(agent.session)}" type="button">Stop session</button></div></details>
   `;
@@ -3653,11 +3701,20 @@ function presetSelectOptions(selected) {
   `).join('');
 }
 
-function modelOption(modelId) {
-  return (state.options.models || []).find((model) => model.id === modelId) || null;
+function providerModels(provider = 'codex') {
+  return (state.options.agentProviders || []).find((item) => item.id === provider)?.models || state.options.models || [];
 }
 
-function modelSelectOptions(selected = '') {
+function providerSelectOptions(selected = 'codex') {
+  return (state.options.agentProviders || []).map((provider) => `<option value="${escapeHtml(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${escapeHtml(provider.label)}</option>`).join('');
+}
+
+function modelOption(modelId, provider = 'codex') {
+  return providerModels(provider).find((model) => model.id === modelId) || null;
+}
+
+function modelSelectOptions(selected = '', provider = 'codex') {
+  if (provider === 'antigravity') return [`<option value="" ${selected ? '' : 'selected'}>Antigravity default</option>`, ...providerModels(provider).map((model) => `<option value="${escapeHtml(model.id)}" ${selected === model.id ? 'selected' : ''}>${escapeHtml(model.label)}</option>`)].join('');
   const configured = state.options.configuredDefault || {};
   const configuredDetail = [configured.modelLabel || configured.model, configured.reasoning]
     .filter(Boolean)
@@ -3672,25 +3729,25 @@ function modelSelectOptions(selected = '') {
   return options.join('');
 }
 
-function reasoningEffortsFor(modelId = '') {
-  const model = modelOption(modelId);
+function reasoningEffortsFor(modelId = '', provider = 'codex') {
+  const model = modelOption(modelId, provider);
   const efforts = model?.reasoningEfforts?.length ? model.reasoningEfforts : state.options.reasoningEfforts;
   return efforts?.length ? efforts : ['low', 'medium', 'high', 'xhigh'];
 }
 
-function normalizedReasoning(modelId, requested) {
-  const efforts = reasoningEffortsFor(modelId);
+function normalizedReasoning(modelId, requested, provider = 'codex') {
+  const efforts = reasoningEffortsFor(modelId, provider);
   if (efforts.includes(requested)) return requested;
   const modelDefault = modelId
-    ? modelOption(modelId)?.defaultReasoning
+    ? modelOption(modelId, provider)?.defaultReasoning
     : state.options.configuredDefault?.reasoning;
   if (modelDefault && efforts.includes(modelDefault)) return modelDefault;
   return efforts.includes('xhigh') ? 'xhigh' : efforts[0];
 }
 
-function reasoningSelectOptions(modelId = '', selected = '') {
-  const normalized = normalizedReasoning(modelId, selected);
-  return reasoningEffortsFor(modelId).map((effort) => `
+function reasoningSelectOptions(modelId = '', selected = '', provider = 'codex') {
+  const normalized = normalizedReasoning(modelId, selected, provider);
+  return reasoningEffortsFor(modelId, provider).map((effort) => `
     <option value="${escapeHtml(effort)}" ${normalized === effort ? 'selected' : ''}>${escapeHtml(effort)}</option>
   `).join('');
 }
@@ -3700,7 +3757,8 @@ function syncModelSettings(scope) {
   const reasoningSelect = scope?.querySelector?.('[data-reasoning-select]');
   if (!modelSelect || !reasoningSelect) return;
   const current = reasoningSelect.value;
-  reasoningSelect.innerHTML = reasoningSelectOptions(modelSelect.value, current);
+  const provider = scope.closest('form')?.elements?.provider?.value || 'codex';
+  reasoningSelect.innerHTML = reasoningSelectOptions(modelSelect.value, current, provider);
 }
 
 function normalizedLinks(service) {
@@ -5133,6 +5191,7 @@ function createTerminalWindow({ session = null, mode = 'static', lines = 120, pa
       </span>
       <span class="terminal-tool-group terminal-agent-tools" role="group" aria-label="Agent commands">
         <span class="terminal-tool-group-label" aria-hidden="true">Agent</span>
+        <button class="terminal-antigravity-enter hidden" data-action="antigravity-enter" type="button" title="Send one Enter key to the active Antigravity terminal">Enter</button>
         <button data-action="terminal-command" data-command="/model" type="button" title="Choose model and reasoning level">Model</button>
         <button data-action="terminal-command" data-command="/status" type="button">Status</button>
         <button data-action="terminal-command" data-command="/usage" type="button">Usage</button>
@@ -5223,6 +5282,7 @@ function createTerminalWindow({ session = null, mode = 'static', lines = 120, pa
     resumeButton: element.querySelector('[data-action="terminal-resume-agent"]'),
     commandBar: element.querySelector('.terminal-command-bar'),
     agentTools: element.querySelector('.terminal-agent-tools'),
+    antigravityEnter: element.querySelector('.terminal-antigravity-enter'),
     recoveryTools: element.querySelector('.terminal-recovery-tools'),
     quickCommands: [...element.querySelectorAll('[data-action="terminal-command"], .picker-toggle')],
     findToggle: element.querySelector('.terminal-find-toggle'),
@@ -5984,6 +6044,7 @@ function syncTerminalTools(item, commandsAvailable = item.mode === 'agent' && ca
   item.commandBar.classList.toggle('hidden', !expanded);
   item.quickCommands.forEach((button) => button.classList.toggle('hidden', !commandsAvailable));
   item.agentTools.classList.toggle('hidden', !commandsAvailable);
+  item.antigravityEnter.classList.toggle('hidden', currentAgent(item.session)?.provider !== 'antigravity' || !commandsAvailable);
   item.recoveryTools.classList.toggle('hidden', item.mode === 'static' || !item.session);
   item.refreshToggle.classList.toggle('hidden', item.mode === 'static');
   item.toolsToggle.classList.remove('hidden');
@@ -6672,6 +6733,77 @@ async function lockSshRescue() {
   }
 }
 
+async function sendAntigravityUiKey(session, key) {
+  try {
+    await api('/api/agent/antigravity-ui-key', {
+      method: 'POST',
+      body: JSON.stringify({ session, key })
+    });
+    window.setTimeout(() => loadSnapshot('manual'), 160);
+  } catch (error) {
+    setNotice(`Antigravity control failed: ${error.message}`, 'error');
+  }
+}
+
+function antigravityUsageSettings() {
+  try {
+    const saved = JSON.parse(safeStorageGet('panefleet:antigravity-usage-settings', '{"enabled":false,"minutes":15}'));
+    return { enabled: saved.enabled === true, minutes: Math.max(5, Math.min(1440, Number(saved.minutes) || 15)) };
+  } catch {
+    return { enabled: false, minutes: 15 };
+  }
+}
+
+function saveAntigravityUsageSettings(next) {
+  safeStorageSet('panefleet:antigravity-usage-settings', JSON.stringify(next));
+}
+
+async function refreshAntigravityUsage(session, { automatic = false } = {}) {
+  if (state.antigravityUsageRefreshing) return;
+  state.antigravityUsageRefreshing = true;
+  try {
+    const result = await api('/api/agent/antigravity-usage-refresh', { method: 'POST', body: JSON.stringify({ session }) });
+    safeStorageSet('panefleet:antigravity-usage', JSON.stringify(result.usage));
+    if (!automatic) setNotice('Antigravity usage refreshed.');
+    await loadSnapshot('manual');
+  } catch (error) {
+    if (!automatic) setNotice(`Antigravity usage refresh failed: ${error.message}`, 'error');
+  } finally {
+    state.antigravityUsageRefreshing = false;
+  }
+}
+
+function scheduleAntigravityUsageRefresh() {
+  const settings = antigravityUsageSettings();
+  if (!settings.enabled || state.antigravityUsageRefreshing) return;
+  const agent = currentAgent(state.selectedSession);
+  if (agent?.provider !== 'antigravity' || agent.agentStatus?.state !== 'idle') return;
+  let lastObserved = 0;
+  try { lastObserved = Date.parse(JSON.parse(safeStorageGet('panefleet:antigravity-usage', '{}')).observedAt || ''); } catch { /* no cached refresh */ }
+  if (!Number.isFinite(lastObserved) || Date.now() - lastObserved >= settings.minutes * 60_000) void refreshAntigravityUsage(agent.session, { automatic: true });
+}
+
+async function renameAgent(session) {
+  const currentName = displayNameForSession(session);
+  const name = window.prompt('Name this agent session in PaneFleet:', currentName);
+  if (name === null) return;
+  const normalized = name.trim().replace(/\s+/g, ' ');
+  if (!normalized) {
+    setNotice('A session name is required.', 'error');
+    return;
+  }
+  try {
+    const result = await api('/api/agent/rename', {
+      method: 'POST',
+      body: JSON.stringify({ session, name: normalized })
+    });
+    setNotice(`${result.displayName} is now the dashboard name for tmux ${session}.`);
+    await loadSnapshot('manual');
+  } catch (error) {
+    setNotice(`Rename failed: ${error.message}`, 'error');
+  }
+}
+
 async function resumeAgent(session, model = '', reasoning = '') {
   const targetLabel = displayNameForSession(session);
   const agent = currentAgent(session);
@@ -6805,6 +6937,7 @@ function readAgentDraft(form) {
     directoryName: String(formData.get('directoryName') || ''),
     workspace: String(formData.get('workspace') || '__new__'),
     preset: String(formData.get('preset') || ''),
+    provider: String(formData.get('provider') || 'codex'),
     model: String(formData.get('model') || ''),
     reasoning: String(formData.get('reasoning') || ''),
     prompt: String(formData.get('prompt') || '')
@@ -6844,6 +6977,7 @@ async function createAgent(form) {
   const workspaceMode = workspace === '__new__' ? 'new' : 'existing';
   const model = String(formData.get('model') || '').trim();
   const reasoning = String(formData.get('reasoning') || '').trim();
+  const provider = String(formData.get('provider') || 'codex').trim();
   const prompt = String(formData.get('prompt') || '');
   if (workspaceMode === 'new' && !name && !directoryName) {
     setNotice('New agent needs a name or workspace folder.', 'error');
@@ -6858,7 +6992,7 @@ async function createAgent(form) {
     const result = await api('/api/agent/create', {
       method: 'POST',
       timeoutMs: 45000,
-      body: JSON.stringify({ name, directoryName, workspace, workspaceMode, model, reasoning, prompt })
+      body: JSON.stringify({ name, directoryName, workspace, workspaceMode, provider, model, reasoning, prompt })
     });
     const outcome = agentCreateOutcome(result, Boolean(prompt.trim()));
     markAgentInteraction(result.session, 'agent.create', new Date().toISOString(), { rerender: false });
@@ -6867,7 +7001,7 @@ async function createAgent(form) {
     const preserveDraft = outcome.preserveDraft || draftChangedWhileStarting;
     if (!preserveDraft) {
       form.reset();
-      state.agentDraft = { open: false, name: '', directoryName: '', workspace: '__new__', preset: '', model: '', reasoning: '', prompt: '' };
+      state.agentDraft = { open: false, name: '', directoryName: '', workspace: '__new__', preset: '', provider: 'codex', model: '', reasoning: '', prompt: '' };
     } else {
       state.agentDraft.open = true;
     }
@@ -8969,6 +9103,18 @@ document.addEventListener('click', (event) => {
         runElementTask(target, () => resumeAgent(target.dataset.session, model, reasoning));
       }
       break;
+    case 'agent-rename':
+      runElementTask(target, () => renameAgent(target.dataset.session));
+      break;
+    case 'antigravity-ui-key':
+      runElementTask(target, () => sendAntigravityUiKey(target.dataset.session, target.dataset.key));
+      break;
+    case 'antigravity-enter':
+      if (terminalItem) runElementTask(target, () => sendAntigravityUiKey(terminalItem.session, 'select'));
+      break;
+    case 'antigravity-usage-refresh':
+      runElementTask(target, () => refreshAntigravityUsage(target.dataset.session));
+      break;
     case 'interrupt-agent':
       runElementTask(target, () => interruptAgent(target.dataset.session));
       break;
@@ -9113,6 +9259,17 @@ document.addEventListener('paste', (event) => {
 });
 
 document.addEventListener('change', (event) => {
+  if (event.target?.matches?.('[data-action="antigravity-usage-auto"], [data-action="antigravity-usage-minutes"]')) {
+    const current = antigravityUsageSettings();
+    const next = {
+      enabled: event.target.matches('[data-action="antigravity-usage-auto"]') ? event.target.checked : current.enabled,
+      minutes: event.target.matches('[data-action="antigravity-usage-minutes"]') ? Math.max(5, Math.min(1440, Number(event.target.value) || 15)) : current.minutes
+    };
+    saveAntigravityUsageSettings(next);
+    if (event.target.matches('[data-action="antigravity-usage-minutes"]')) event.target.value = String(next.minutes);
+    if (next.enabled) scheduleAntigravityUsageRefresh();
+    return;
+  }
   if (event.target?.classList?.contains('prompt-target-mobile-select')) {
     selectPromptQueueTarget(event.target, { forceSingle: true, restoreCardFocus: false });
     return;
@@ -9165,6 +9322,11 @@ document.addEventListener('change', (event) => {
   }
   if (event.target.name === 'workspace') {
     syncAgentLauncher(form);
+    return;
+  }
+  if (event.target.name === 'provider') {
+    state.agentDraft = { ...state.agentDraft, provider: event.target.value, model: '', reasoning: '' };
+    render();
     return;
   }
   readAgentDraft(form);
@@ -9318,7 +9480,10 @@ async function sendTerminalUiKey(item, key) {
       const canPrompt = canPromptAgent(item.session);
       if (!canPrompt.ok) throw new Error(`${displayNameForSession(item.session)} is not accepting input`);
       const activeMission = activeMissionForAgentSession(item.session);
-      await api('/api/agent/ui-key', {
+      const uiKeyEndpoint = currentAgent(item.session)?.provider === 'antigravity'
+        ? '/api/agent/antigravity-ui-key'
+        : '/api/agent/ui-key';
+      await api(uiKeyEndpoint, {
         method: 'POST',
         body: JSON.stringify({ session: item.session, key: nextKey, missionId: activeMission?.id || null })
       });
@@ -9603,3 +9768,4 @@ document.addEventListener('beforeinput', (event) => {
 loadSnapshot('startup');
 connectEvents();
 loadOptions();
+window.setInterval(scheduleAntigravityUsageRefresh, 60_000);

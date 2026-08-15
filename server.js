@@ -123,6 +123,7 @@ const accessTokenPath = process.env.ORCHESTRATOR_ACCESS_TOKEN_FILE || path.join(
 const auditLogPath = path.join(dataDir, 'actions.jsonl');
 const agentSamplesPath = path.join(dataDir, 'agent-samples.json');
 const agentInteractionsPath = path.join(dataDir, 'agent-interactions.json');
+const agentDisplayNamesPath = path.join(dataDir, 'agent-display-names.json');
 const missionQueuePath = path.join(dataDir, 'mission-queue.json');
 const promptQueuePath = process.env.PROMPT_QUEUE_PATH || path.join(dataDir, 'prompt-queue.json');
 const notificationStatePath = path.join(dataDir, 'notification-state.json');
@@ -470,6 +471,7 @@ const AGENT_UI_KEYS = Object.freeze({
   select: 'C-m',
   cancel: 'Escape'
 });
+const ANTIGRAVITY_UI_KEYS = Object.freeze({ up: 'Up', down: 'Down', left: 'Left', right: 'Right', select: 'C-m', cancel: 'Escape' });
 const CONTROL_COOKIE = 'host_control_session';
 const CONTROL_SESSION_TOKEN = randomBytes(32).toString('base64url');
 const ACCESS_USERNAME = 'host-control';
@@ -493,6 +495,7 @@ const AGENT_INTERACTION_ACTIONS = new Set([
   'prompt_queue.sent',
   'session.interrupt'
 ]);
+const AGENT_DISPLAY_NAME_MAX_LENGTH = 80;
 const PROMPT_QUEUE_SUPERSEDING_INTERACTIONS = new Set([
   'agent.interrupt',
   'agent.send',
@@ -560,6 +563,7 @@ let agentSampleLastWrittenAtMs = 0;
 let agentInteractionStore = null;
 let agentInteractionWritePending = false;
 let agentInteractionDirty = false;
+let agentDisplayNameStore = null;
 let missionQueueStore = null;
 let missionOperationQueue = Promise.resolve();
 let promptQueueStore = null;
@@ -804,6 +808,14 @@ async function findPromptableCodexPane(session, expectedPaneId = '') {
   return pane;
 }
 
+async function findPromptableAntigravityPane(session, expectedPaneId = '') {
+  if (!/^(?:agy|antigravity)(?:[\w-]*)?$/.test(String(session || '')) || PROTECTED_TMUX_SESSIONS.has(session)) return null;
+  const pane = await findExactTmuxPane(session, expectedPaneId);
+  if (!await exactPaneHasActiveAntigravityProcess(pane)) return null;
+  pane.antigravityInputActive = true;
+  return pane;
+}
+
 async function waitForPromptableCodexPane(session, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -946,7 +958,7 @@ function requestedExactAgentIdentity(input, session, { required = false } = {}) 
   const tmuxPaneId = String(source.tmuxPaneId || '').trim();
   const panePid = Number(source.panePid);
   if (
-    !isAgentInteractionTarget(session) ||
+    !isInteractiveAgentSession(session) ||
     !validMissionTimestamp(sessionCreatedAt, { nullable: false }) ||
     !paneId.startsWith(`${session}:`) ||
     !/^[A-Za-z0-9_.-]{1,128}:\d+\.\d+$/.test(paneId) ||
@@ -1242,6 +1254,23 @@ async function codexModelOptions() {
   return (await codexModelCatalog()).models;
 }
 
+async function antigravityModelCatalog() {
+  const fallback = [
+    ['gemini-3.7-flash-high', 'Gemini 3.7 Flash (High)'], ['gemini-3.7-flash-medium', 'Gemini 3.7 Flash (Medium)'], ['gemini-3.7-flash-low', 'Gemini 3.7 Flash (Low)'],
+    ['gemini-3.6-flash-high', 'Gemini 3.6 Flash (High)'], ['gemini-3.6-flash-medium', 'Gemini 3.6 Flash (Medium)'], ['gemini-3.6-flash-low', 'Gemini 3.6 Flash (Low)'],
+    ['gemini-3.5-flash-high', 'Gemini 3.5 Flash (High)'], ['gemini-3.5-flash-medium', 'Gemini 3.5 Flash (Medium)'], ['gemini-3.5-flash-low', 'Gemini 3.5 Flash (Low)'],
+    ['gemini-3.1-pro-high', 'Gemini 3.1 Pro (High)'], ['gemini-3.1-pro-low', 'Gemini 3.1 Pro (Low)'], ['claude-sonnet-4-6', 'Claude Sonnet 4.6 (Thinking)'], ['claude-opus-4-6-thinking', 'Claude Opus 4.6 (Thinking)'], ['gpt-oss-120b-medium', 'GPT-OSS 120B (Medium)']
+  ];
+  const command = process.env.ANTIGRAVITY_COMMAND || path.join(homeDir, '.local', 'bin', 'agy');
+  const result = await run(command, ['models']);
+  const rows = result.ok && result.stdout.trim() ? result.stdout.split('\n').map((line) => line.trim()).map((line) => line.split(/\t+/, 2)) : fallback;
+  const models = rows.map(([id, label]) => {
+    const effort = String(id || '').match(/-(low|medium|high)$/)?.[1] || '';
+    return /^[a-z0-9._-]+$/i.test(id || '') ? { id, label: String(label || id).slice(0, 80), defaultReasoning: effort || 'high', reasoningEfforts: effort ? [effort] : ['low', 'medium', 'high'] } : null;
+  }).filter(Boolean);
+  return { models, status: result.ok ? 'ready' : 'cached' };
+}
+
 function topLevelTomlValue(contents, key) {
   for (const rawLine of String(contents || '').split('\n')) {
     const line = rawLine.trim();
@@ -1291,6 +1320,16 @@ async function resolveCodexSelection(body = {}) {
   return { model: requestedModel, reasoning: requestedReasoning };
 }
 
+async function resolveAntigravitySelection(body = {}) {
+  const catalog = await antigravityModelCatalog();
+  const model = String(body.model || '').trim();
+  const selected = model ? catalog.models.find((item) => item.id === model) : null;
+  if (model && !selected) return { error: 'invalid_antigravity_model' };
+  const effort = String(body.reasoning || selected?.defaultReasoning || 'high').trim();
+  if (!['low', 'medium', 'high'].includes(effort)) return { error: 'invalid_antigravity_effort' };
+  return { model, reasoning: effort, mode: 'default' };
+}
+
 function codexLaunchCommand(prefix, selection) {
   const args = [prefix, '--yolo'];
   if (selection.model) args.push('--model', selection.model);
@@ -1300,6 +1339,14 @@ function codexLaunchCommand(prefix, selection) {
 
 function persistentCodexShellCommand(command) {
   return 'bash -lc ' + shellQuote(command + '; exec bash -l');
+}
+
+function antigravityLaunchCommand(selection) {
+  const command = process.env.ANTIGRAVITY_COMMAND || path.join(homeDir, '.local', 'bin', 'agy');
+  const args = [shellQuote(command), '--mode=default'];
+  if (selection.model) args.push('--model', shellQuote(selection.model));
+  if (selection.reasoning) args.push('--effort', shellQuote(selection.reasoning));
+  return args.join(' ');
 }
 
 function normalizeIpv4(value) {
@@ -2616,6 +2663,15 @@ function codexIdlePromptVisible(output) {
   return promptIndex >= 0 && footerIndex > promptIndex && footerIndex >= lines.length - 2;
 }
 
+function antigravityIdlePromptVisible(output) {
+  const lines = lastOutputSnippet(output, 18).split('\n');
+  const hasShortcutHint = lines.some((line) => /\?\s+for shortcuts/i.test(line));
+  const promptIndex = lines.findLastIndex((line) => /^\s*>\s*$/.test(line));
+  if (!hasShortcutHint || promptIndex < 0) return false;
+  const trailing = lines.slice(promptIndex + 1).join('\n');
+  return !/\b(?:esc to (?:stop|interrupt)|working|thinking|running|permission|allow|approve)\b/i.test(trailing);
+}
+
 function serviceConfigError(location, message) {
   throw new Error(`services.json ${location}: ${message}`);
 }
@@ -2830,11 +2886,16 @@ async function workspaceOptions() {
 
 async function optionsSnapshot() {
   const modelCatalog = await codexModelCatalog();
+  const antigravityCatalog = await antigravityModelCatalog();
   const configuredDefault = await codexConfiguredDefault(modelCatalog.models);
   return {
     workspaces: await workspaceOptions(),
     promptPresets: PROMPT_PRESETS,
     models: modelCatalog.models,
+    agentProviders: [
+      { id: 'codex', label: 'OpenAI Codex', models: modelCatalog.models, configuredDefault },
+      { id: 'antigravity', label: 'Google Antigravity', models: antigravityCatalog.models, defaultMode: 'default' }
+    ],
     configuredDefault,
     reasoningEfforts: configuredDefault.reasoningEfforts.length
       ? configuredDefault.reasoningEfforts
@@ -2883,6 +2944,17 @@ function processCommandIsCodex(command) {
     /(?:^|[\s/])codex(?:[\s/]|$)|@openai\/codex/i.test(value);
 }
 
+function processCommandIsAntigravity(command) {
+  const executable = String(command || '').trim().split(/\s+/, 1)[0].split('/').pop() || '';
+  return executable === 'agy';
+}
+
+function agentProviderForSession(session) {
+  if (/^codex(?:[\w-]*)?$/.test(session)) return 'codex';
+  if (/^(?:agy|antigravity)(?:[\w-]*)?$/.test(session)) return 'antigravity';
+  return '';
+}
+
 function processDescendsFrom(process, rootPid, byPid) {
   let current = process;
   const visited = new Set();
@@ -2904,6 +2976,16 @@ function processListHasActiveCodex(processes, panePid) {
   );
 }
 
+function processListHasActiveAntigravity(processes, panePid) {
+  if (!Number.isInteger(panePid) || panePid < 1) return false;
+  const byPid = new Map(processes.map((process) => [process.pid, process]));
+  return processes.some((process) =>
+    String(process.stat || '').includes('+') &&
+    processCommandIsAntigravity(process.command) &&
+    processDescendsFrom(process, panePid, byPid)
+  );
+}
+
 function paneCanReceiveCodexInput(pane) {
   return Boolean(
     pane?.dead !== true &&
@@ -2921,8 +3003,17 @@ async function exactPaneHasActiveCodexProcess(pane) {
   return processListHasActiveCodex(processes, pane.panePid);
 }
 
+async function exactPaneHasActiveAntigravityProcess(pane) {
+  if (!pane || pane.dead === true) return false;
+  if (pane.currentCommand === 'agy') return true;
+  if (!['bash', 'sh', 'zsh'].includes(pane.currentCommand) || !Number.isInteger(pane.panePid)) return false;
+  const result = await run('ps', ['-eo', 'pid,ppid,tty,stat,pcpu,pmem,rss,cmd']);
+  if (!result.ok) return false;
+  return processListHasActiveAntigravity([...parseTtyPidMap(result.stdout).values()].flat(), pane.panePid);
+}
+
 function classifySession(session, currentCommand, currentPath, services) {
-  if (/^codex(?:[\w-]*)?$/.test(session)) return 'agent';
+  if (agentProviderForSession(session)) return 'agent';
   if (services.some((service) => serviceMatchesSession(service, session))) return 'service';
   if (currentPath?.includes('/projects/') && ['npm', 'node', 'bash'].includes(currentCommand)) return 'service';
   return 'other';
@@ -2944,9 +3035,9 @@ function parseTmuxPanes(output, ttyProcessMap, services) {
     const processes = ttyProcessMap.get(paneTty) || [];
     const primary = processes.find((proc) => proc.pid !== Number(panePid)) || processes[0] || null;
     const type = classifySession(session, currentCommand, currentPath, services);
-    const codexInputActive = type === 'agent' && !dead && (
-      currentCommand === 'node' || processListHasActiveCodex(processes, Number(panePid))
-    );
+    const provider = agentProviderForSession(session);
+    const codexInputActive = provider === 'codex' && !dead && (currentCommand === 'node' || processListHasActiveCodex(processes, Number(panePid)));
+    const antigravityInputActive = provider === 'antigravity' && !dead && (currentCommand === 'agy' || processListHasActiveAntigravity(processes, Number(panePid)));
     const createdSeconds = Number(sessionCreated);
     return {
       id: `${session}:${windowIndex}.${paneIndex}`,
@@ -2966,8 +3057,10 @@ function parseTmuxPanes(output, ttyProcessMap, services) {
       currentPath,
       title: redactSensitive(titleParts.join('|')),
       type,
-      canSend: codexInputActive,
-      canResume: type === 'agent' && !dead && !codexInputActive && /^codex(?:[\w-]*)?$/.test(session),
+      provider: provider || null,
+      canSend: Boolean(codexInputActive || antigravityInputActive),
+      canControl: Boolean(codexInputActive || antigravityInputActive),
+      canResume: provider === 'codex' && !dead && !codexInputActive,
       canStopSession: !PROTECTED_TMUX_SESSIONS.has(session),
       processes,
       primaryProcess: primary
@@ -3455,10 +3548,13 @@ function inferAgentStatus(agent, preview) {
   const usefulRecent = usefulOutputLines(`${preview?.lastOutput || ''}\n${preview?.lastLine || ''}`).slice(-8).join('\n').toLowerCase();
   const textValue = usefulRecent || rawRecent;
   const cpu = agent.primaryProcess?.cpu || 0;
+  if (agent.provider === 'antigravity' && antigravityIdlePromptVisible(preview?.output || '')) {
+    return { state: 'idle', tone: 'good', reason: 'prompt ready' };
+  }
   if (codexNeedsInput(rawRecent)) {
     return { state: 'waiting', tone: 'warn', reason: 'input needed' };
   }
-  const runtimeSignal = codexRuntimeSignal(agent, preview?.output || '');
+  const runtimeSignal = agent.provider === 'codex' ? codexRuntimeSignal(agent, preview?.output || '') : null;
   if (runtimeSignal) return runtimeSignal;
   if (codexIdlePromptVisible(preview?.output || '')) {
     return { state: 'idle', tone: 'good', reason: 'prompt ready' };
@@ -3751,6 +3847,8 @@ function taskRoleName(task) {
 }
 
 function agentDisplayName(agent, brief) {
+  const customName = customAgentDisplayName(agent);
+  if (customName) return customName;
   const area = workspaceAreaName(agent.currentPath);
   const role = taskRoleName(`${brief?.task || ''} ${brief?.activity || ''}`);
   if (role === 'Monitor') return `${area} Monitor`;
@@ -4122,6 +4220,51 @@ async function readAudit(limit = 30) {
 function isAgentInteractionTarget(value) {
   const session = String(value || '');
   return /^codex(?:[\w-]*)?$/.test(session) && session !== REVIEW_SESSION;
+}
+
+function isInteractiveAgentSession(value) {
+  const session = String(value || '');
+  return isAgentInteractionTarget(session) || /^(?:agy|antigravity)(?:[\w-]*)?$/.test(session);
+}
+
+function emptyAgentDisplayNameStore() {
+  return { version: 1, labels: {} };
+}
+
+function validateAgentDisplayNameStore(store) {
+  if (!store || typeof store !== 'object' || Array.isArray(store) || store.version !== 1 || !store.labels || typeof store.labels !== 'object' || Array.isArray(store.labels)) {
+    throw new Error('agent_display_names_invalid');
+  }
+  for (const [session, entry] of Object.entries(store.labels)) {
+    if (!isAgentInteractionTarget(session) || !entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('agent_display_names_invalid');
+    if (typeof entry.name !== 'string' || !entry.name.trim() || entry.name.length > AGENT_DISPLAY_NAME_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(entry.name)) throw new Error('agent_display_names_invalid');
+    if (typeof entry.sessionCreatedAt !== 'string' || !validMissionTimestamp(entry.sessionCreatedAt)) throw new Error('agent_display_names_invalid');
+  }
+  return store;
+}
+
+async function ensureAgentDisplayNames() {
+  if (agentDisplayNameStore) return agentDisplayNameStore;
+  try {
+    agentDisplayNameStore = validateAgentDisplayNameStore(JSON.parse(await readFile(agentDisplayNamesPath, 'utf8')));
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    agentDisplayNameStore = emptyAgentDisplayNameStore();
+    await persistAgentDisplayNames(agentDisplayNameStore);
+  }
+  return agentDisplayNameStore;
+}
+
+async function persistAgentDisplayNames(store) {
+  agentDisplayNameStore = validateAgentDisplayNameStore(store);
+  await mkdir(dataDir, { recursive: true });
+  await writeJsonAtomic(agentDisplayNamesPath, agentDisplayNameStore, { spaces: 2 });
+  return agentDisplayNameStore;
+}
+
+function customAgentDisplayName(agent) {
+  const entry = agentDisplayNameStore?.labels?.[agent?.session];
+  return entry && entry.sessionCreatedAt === agent?.sessionCreatedAt ? entry.name : '';
 }
 
 async function ensureAgentInteractions() {
@@ -6856,6 +6999,7 @@ async function deliverTextToAgent(session, textValue, {
 
 async function sendToAgent(body, req) {
   const session = String(body.session || '').trim();
+  if (/^(?:agy|antigravity)(?:[\w-]*)?$/.test(session)) return sendToAntigravity(body, req);
   const textValue = String(body.text || '');
   if (!promptTextSafety(textValue).safe) {
     return { status: 400, body: { error: 'prompt_hidden_text_detected' } };
@@ -6950,6 +7094,68 @@ async function sendToAgent(body, req) {
       queueContinuation
     }
   };
+}
+
+async function sendToAntigravity(body, req) {
+  const session = String(body.session || '').trim();
+  const textValue = String(body.text || '');
+  if (!promptTextSafety(textValue).safe) return { status: 400, body: { error: 'prompt_hidden_text_detected' } };
+  if (!textValue) return { status: 400, body: { error: 'missing_session_or_text' } };
+  const expected = requestedExactAgentIdentity(body, session);
+  if (expected === undefined) return { status: 400, body: { error: 'invalid_agent_identity' } };
+  let pane = await findPromptableAntigravityPane(session, expected?.id || '');
+  if (!pane) return { status: 409, body: { error: 'antigravity_session_unavailable' } };
+  if (expected && !paneIdentityFieldsMatch(pane, expected)) return { status: 409, body: { error: 'agent_pane_replaced' } };
+  const identity = exactPaneIdentity(pane);
+  const protectedPane = await run('tmux', ['set-option', '-p', '-t', identity.tmuxPaneId, 'remain-on-exit', 'on']);
+  if (!protectedPane.ok) return { status: 409, body: { error: 'agent_lifecycle_guard_failed' } };
+  pane = await findPromptableAntigravityPane(session, identity.id);
+  if (!pane || !paneIdentityFieldsMatch(pane, identity)) return { status: 409, body: { error: 'agent_pane_replaced' } };
+  const target = `${pane.session}:${pane.windowIndex}.${pane.paneIndex}`;
+  const delivery = await enqueuePaneInput(target, () => typeTextAndSubmit(target, textValue));
+  if (!delivery.sent?.ok || !delivery.entered?.ok) {
+    const error = delivery.sent?.ok ? 'terminal_submit_failed' : 'terminal_literal_input_failed';
+    await appendAudit(req, { action: 'agent.antigravity_send', target: session, ok: false, detail: error });
+    return { status: 500, body: { error } };
+  }
+  await appendAudit(req, { action: 'agent.antigravity_send', target: session, ok: true, detail: `typed_input chars=${textValue.length}; submit=${delivery.submitKey}` });
+  return { status: 200, body: { ok: true, session, submitted: true, mode: 'terminal-input', provider: 'antigravity' } };
+}
+
+function antigravityUsageReport(output) {
+  const textValue = String(output || '');
+  const account = textValue.match(/Account:\s*([^\s]+@[^\s]+)/i)?.[1] || '';
+  const quota = (heading) => {
+    const section = textValue.match(new RegExp(`${heading}[\\s\\S]{0,360}?([0-9]+(?:\\.[0-9]+)?)%\\s*remaining\\s*·\\s*Refreshes in\\s*([^\\n]+)`, 'i'));
+    return section ? { remainingPercent: Number(section[1]), refreshesIn: section[2].trim() } : null;
+  };
+  return {
+    account,
+    weekly: quota('Weekly Limit Remaining'),
+    fiveHour: quota('Five Hour Limit Remaining'),
+    observedAt: new Date().toISOString()
+  };
+}
+
+async function refreshAntigravityUsage(body, req) {
+  const session = String(body.session || '').trim();
+  const pane = await findPromptableAntigravityPane(session);
+  if (!pane) return { status: 409, body: { error: 'antigravity_session_unavailable' } };
+  const target = `${pane.session}:${pane.windowIndex}.${pane.paneIndex}`;
+  const result = await enqueuePaneInput(target, async () => {
+    const before = await panePreview(pane, 40);
+    if (!before.ok || !antigravityIdlePromptVisible(before.output)) return { ok: false, error: 'antigravity_session_not_idle' };
+    const delivered = await typeTextAndSubmit(target, '/usage');
+    if (!delivered.sent?.ok || !delivered.entered?.ok) return { ok: false, error: 'antigravity_usage_open_failed' };
+    await sleep(800);
+    const captured = await panePreview(pane, 100);
+    const usage = antigravityUsageReport(captured.output);
+    await run('tmux', ['send-keys', '-t', target, 'Escape']);
+    if (!usage.weekly && !usage.fiveHour) return { ok: false, error: 'antigravity_usage_not_reported' };
+    return { ok: true, usage };
+  });
+  await appendAudit(req, { action: 'agent.antigravity_usage_refresh', target: session, ok: result.ok, detail: result.ok ? 'usage_panel_captured; panel_closed=true' : result.error || 'failed' });
+  return result.ok ? { status: 200, body: { ok: true, session, usage: result.usage } } : { status: 409, body: { error: result.error || 'antigravity_usage_refresh_failed' } };
 }
 
 function requestedMultiAgentPromptTargets(body) {
@@ -10151,14 +10357,34 @@ async function sendAgentUiKey(body, req) {
   return { status: 200, body: { ok: true, session, key: keyId } };
 }
 
+async function sendAntigravityUiKey(body, req) {
+  const session = String(body.session || '').trim();
+  const key = String(body.key || '').trim();
+  if (!/^(?:agy|antigravity)(?:[\w-]*)?$/.test(session) || !Object.hasOwn(ANTIGRAVITY_UI_KEYS, key)) {
+    return { status: 400, body: { error: 'invalid_antigravity_ui_key' } };
+  }
+  const pane = await findExactTmuxPane(session);
+  if (!await exactPaneHasActiveAntigravityProcess(pane)) return { status: 409, body: { error: 'antigravity_session_unavailable' } };
+  const expected = exactPaneIdentity(pane);
+  const result = await enqueuePaneInput(`${pane.session}:${pane.windowIndex}.${pane.paneIndex}`, async () => {
+    const current = await findExactTmuxPane(session, expected.id);
+    if (!current || !paneIdentityFieldsMatch(current, expected) || !await exactPaneHasActiveAntigravityProcess(current)) return { ok: false, error: 'agent_pane_replaced' };
+    return run('tmux', ['send-keys', '-t', current.tmuxPaneId, ANTIGRAVITY_UI_KEYS[key]]);
+  });
+  if (!result.ok) return { status: 409, body: { error: result.error || 'antigravity_ui_key_failed' } };
+  await appendAudit(req, { action: 'agent.antigravity_ui_key', target: session, ok: true, detail: `key=${key}` });
+  return { status: 200, body: { ok: true, session, key } };
+}
+
 async function createAgent(body, req) {
+  const provider = body.provider === 'antigravity' ? 'antigravity' : 'codex';
   const rawName = String(body.name || '').trim();
   const rawDir = String(body.directoryName || '').trim();
   const rawWorkspace = String(body.workspace || '').trim();
   const workspaceMode = body.workspaceMode === 'existing' ? 'existing' : 'new';
   const prompt = String(body.prompt || '');
   if (prompt.length > MAX_AGENT_PROMPT_CHARS) return { status: 400, body: { error: 'prompt_too_long', maxChars: MAX_AGENT_PROMPT_CHARS } };
-  const selection = await resolveCodexSelection(body);
+  const selection = provider === 'antigravity' ? await resolveAntigravitySelection(body) : await resolveCodexSelection(body);
   if (selection.error) return { status: 400, body: { error: selection.error } };
 
   let workspace = '';
@@ -10177,7 +10403,7 @@ async function createAgent(body, req) {
   }
 
   const slug = slugify(rawName || workspaceName, 'agent');
-  const session = `codex-${slug}`;
+  const session = `${provider === 'antigravity' ? 'agy' : 'codex'}-${slug}`;
   if (session === 'codex-agent-orchestrator' || session === REVIEW_SESSION || PROTECTED_TMUX_SESSIONS.has(session)) {
     return { status: 400, body: { error: 'reserved_name' } };
   }
@@ -10191,7 +10417,7 @@ async function createAgent(body, req) {
     if (!verifiedWorkspace) return { status: 400, body: { error: 'invalid_workspace' } };
     workspace = verifiedWorkspace;
   }
-  const command = codexLaunchCommand('', selection);
+  const command = provider === 'antigravity' ? antigravityLaunchCommand(selection) : codexLaunchCommand('', selection);
   const start = await run('tmux', ['new-session', '-d', '-s', session, '-c', workspace, persistentCodexShellCommand(command)]);
   if (!start.ok) {
     const detail = redactSensitive(start.stderr || start.error);
@@ -10200,9 +10426,9 @@ async function createAgent(body, req) {
   }
 
   let promptSent = false;
-  let promptError = '';
-  let promptState = prompt.trim() ? 'not_typed' : 'not_requested';
-  if (prompt.trim()) {
+  let promptError = provider === 'antigravity' && prompt.trim() ? 'antigravity_initial_prompt_manual' : '';
+  let promptState = prompt.trim() ? (provider === 'antigravity' ? 'not_typed' : 'not_typed') : 'not_requested';
+  if (provider === 'codex' && prompt.trim()) {
     const pane = await waitForPromptableCodexPane(session, INITIAL_PROMPT_READY_MS);
     if (!pane) {
       promptError = 'agent_prompt_not_ready';
@@ -10270,9 +10496,26 @@ async function createAgent(body, req) {
     }
   }
 
-  const modelLabel = selection.model || 'codex-default';
+  const modelLabel = selection.model || `${provider}-default`;
   await appendAudit(req, { action: 'agent.create', target: session, ok: !prompt.trim() || promptSent, detail: `workspace=${workspace}, model=${modelLabel}, reasoning=${selection.reasoning}, promptChars=${prompt.length}, promptSent=${promptSent}, promptState=${promptState}${promptError ? `, promptError=${promptError}` : ''}` });
-  return { status: 200, body: { ok: true, session, workspace, model: modelLabel, reasoning: selection.reasoning, promptSent, promptState, promptError: promptError || null } };
+  return { status: 200, body: { ok: true, session, provider, workspace, model: modelLabel, reasoning: selection.reasoning, mode: selection.mode || null, promptSent, promptState, promptError: promptError || null } };
+}
+
+async function renameAgent(body, req) {
+  const session = String(body.session || '').trim();
+  const name = String(body.name || '').trim().replace(/\s+/g, ' ');
+  if (!isAgentInteractionTarget(session)) return { status: 400, body: { error: 'invalid_agent_session' } };
+  if (!name || name.length > AGENT_DISPLAY_NAME_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(name)) {
+    return { status: 400, body: { error: 'invalid_agent_name', maxChars: AGENT_DISPLAY_NAME_MAX_LENGTH } };
+  }
+  const current = await snapshot({ includeMissionDetails: false, runSupervisor: false, runPromptQueue: false });
+  const agent = current.agents.find((item) => item.session === session && agentHasCodexProcess(item));
+  if (!agent?.sessionCreatedAt) return { status: 404, body: { error: 'agent_not_found' } };
+  const store = await ensureAgentDisplayNames();
+  const next = { ...store, labels: { ...store.labels, [session]: { name, sessionCreatedAt: agent.sessionCreatedAt } } };
+  await persistAgentDisplayNames(next);
+  await appendAudit(req, { action: 'agent.rename', target: session, ok: true, detail: `nameChars=${name.length}; display_alias_only=true` });
+  return { status: 200, body: { ok: true, session, displayName: name } };
 }
 
 async function sendKeyToSession(session, key, action, req) {
@@ -10765,6 +11008,14 @@ async function handleApi(req, res) {
     const result = await sendAgentUiKey(await readJson(req), req);
     return json(res, result.status, result.body);
   }
+  if (req.method === 'POST' && url.pathname === '/api/agent/antigravity-ui-key') {
+    const result = await sendAntigravityUiKey(await readJson(req), req);
+    return json(res, result.status, result.body);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/agent/antigravity-usage-refresh') {
+    const result = await refreshAntigravityUsage(await readJson(req), req);
+    return json(res, result.status, result.body);
+  }
   if (req.method === 'POST' && url.pathname === '/api/agent/resume') {
     const body = await readJson(req);
     const result = await resumeAgent(String(body.session || '').trim(), body, req);
@@ -10772,6 +11023,10 @@ async function handleApi(req, res) {
   }
   if (req.method === 'POST' && url.pathname === '/api/agent/create') {
     const result = await createAgent(await readJson(req), req);
+    return json(res, result.status, result.body);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/agent/rename') {
+    const result = await renameAgent(await readJson(req), req);
     return json(res, result.status, result.body);
   }
   if (req.method === 'POST' && url.pathname === '/api/agent/interrupt') {
@@ -10831,6 +11086,7 @@ if (REQUIRE_HTTP_AUTH) {
 }
 await loadServices();
 await ensureAgentInteractions();
+await ensureAgentDisplayNames();
 await ensureMissionQueue();
 await ensurePromptQueue();
 await ensureNotificationState();
