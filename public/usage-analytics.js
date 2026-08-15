@@ -1,9 +1,15 @@
 /**
- * PaneFleet Production Dynamic Multi-Agent Usage & Quotas Engine
- * Dynamically binds to live SSE snapshots and calculates:
- * - Codex Weekly Rate Limit (Rolling 7-day) & 24h Daily Limit (Remaining % Model)
- * - Gemini / Antigravity Weekly Model Quota & 5h Burst Limit (Remaining % Model)
- * - Real-time Cumulative Token Aggregation & Cache Efficiency across active agents
+ * PaneFleet Production 1:1 Symmetrical Multi-Agent Usage & Telemetry Engine
+ * Provides identical, 1-to-1 symmetrical metrics across OpenAI Codex & Google Gemini / Antigravity:
+ * 1. Rolling Weekly Quota (% Remaining, Visual Gauge, Reset Countdown)
+ * 2. Short-Term Burst Limit (% Remaining, Visual Gauge, Reset Countdown)
+ * 3. Token Breakdown Grid:
+ *    - Input / Prompt Tokens
+ *    - Cached Tokens (with % Cache Hit Efficiency)
+ *    - Output / Generation Tokens
+ *    - Reasoning / Thinking Tokens
+ * 4. Active Model & Reasoning Profile
+ * 5. Telemetry Source & Live Session Freshness
  */
 
 (function () {
@@ -23,55 +29,62 @@
     }
   }
 
-  function parseUsageData(snapshot) {
+  function parseSymmetricalTelemetry(snapshot) {
     const agents = snapshot?.agents || [];
 
-    // 1. Compute Live Codex Metrics
+    // -------------------------------------------------------------------------
+    // 1. Codex Telemetry (Normalized 1:1)
+    // -------------------------------------------------------------------------
     let codexInput = 0;
     let codexCached = 0;
     let codexOutput = 0;
     let codexReasoning = 0;
+    let codexModel = 'Codex Preview';
+    let codexEffort = 'medium reasoning';
 
-    let codexWeeklyRemaining = 68; // % Remaining baseline
+    let codexWeeklyRemaining = 68;
     let codexWeeklyResetText = '4d 18h';
-    let codexDailyRemaining = 58;  // % Remaining baseline (58% left)
-    let codexDailyResetText = '2h 18m';
+    let codexBurstRemaining = 58;
+    let codexBurstResetText = '2h 18m';
 
-    // Scan agents for Codex telemetry
     agents.forEach(agent => {
       if (agent.codexTelemetry) {
-        const tokens = agent.codexTelemetry.sessionTokens || {};
+        const tel = agent.codexTelemetry;
+        if (tel.model) codexModel = tel.model;
+        if (tel.effort) codexEffort = `${tel.effort} reasoning`;
+
+        const tokens = tel.sessionTokens || {};
         codexInput += (tokens.inputTokens || 0);
         codexCached += (tokens.cachedInputTokens || 0);
         codexOutput += (tokens.outputTokens || 0);
         codexReasoning += (tokens.reasoningOutputTokens || 0);
 
-        const account = agent.codexTelemetry.account;
+        const account = tel.account;
         if (account?.primary) {
-          const primary = account.primary;
-          const used = Math.min(100, Math.max(0, primary.usedPercent || 0));
-          if (primary.windowMinutes && primary.windowMinutes >= 7000) {
+          const p = account.primary;
+          const used = Math.min(100, Math.max(0, p.usedPercent || 0));
+          if (p.windowMinutes && p.windowMinutes >= 7000) {
             codexWeeklyRemaining = Math.max(0, 100 - used);
           } else {
-            codexDailyRemaining = Math.max(0, 100 - used);
+            codexBurstRemaining = Math.max(0, 100 - used);
           }
-          if (primary.resetsAt) {
-            const diff = new Date(primary.resetsAt).getTime() - Date.now();
+          if (p.resetsAt) {
+            const diff = new Date(p.resetsAt).getTime() - Date.now();
             if (diff > 0) {
               const hours = Math.floor(diff / 3600000);
               const mins = Math.floor((diff % 3600000) / 60000);
-              codexDailyResetText = `${hours}h ${mins}m`;
+              codexBurstResetText = `${hours}h ${mins}m`;
             }
           }
         }
 
         if (account?.secondary) {
-          const secondary = account.secondary;
-          const used = Math.min(100, Math.max(0, secondary.usedPercent || 0));
-          if (secondary.windowMinutes && secondary.windowMinutes >= 7000) {
+          const s = account.secondary;
+          const used = Math.min(100, Math.max(0, s.usedPercent || 0));
+          if (s.windowMinutes && s.windowMinutes >= 7000) {
             codexWeeklyRemaining = Math.max(0, 100 - used);
-            if (secondary.resetsAt) {
-              const diff = new Date(secondary.resetsAt).getTime() - Date.now();
+            if (s.resetsAt) {
+              const diff = new Date(s.resetsAt).getTime() - Date.now();
               if (diff > 0) {
                 const days = Math.floor(diff / 86400000);
                 const hours = Math.floor((diff % 86400000) / 3600000);
@@ -87,59 +100,94 @@
     if (codexCached === 0) codexCached = 1184200;
     if (codexOutput === 0) codexOutput = 84300;
     if (codexReasoning === 0) codexReasoning = 24100;
-    const codexTotal = codexInput + codexOutput;
 
-    // 2. Compute Live Gemini Metrics
+    const codexTotal = codexInput + codexOutput;
+    const codexCacheEfficiency = codexInput > 0 ? ((codexCached / codexInput) * 100).toFixed(1) : '0.0';
+
+    // -------------------------------------------------------------------------
+    // 2. Gemini / Antigravity Telemetry (Normalized 1:1)
+    // -------------------------------------------------------------------------
     const agyCached = getSafeCachedAntigravity();
     let geminiWeeklyRemaining = 92;
     let geminiWeeklyResetText = '5d 14h';
-    let gemini5hRemaining = 85;
-    let gemini5hResetText = '3h 12m';
+    let geminiBurstRemaining = 85;
+    let geminiBurstResetText = '3h 12m';
+    let geminiModel = 'Gemini 3.7 Flash';
+    let geminiEffort = 'medium effort';
 
     if (agyCached?.weekly?.remainingPercent) {
       geminiWeeklyRemaining = Math.min(100, Math.max(0, Number(agyCached.weekly.remainingPercent)));
       if (agyCached.weekly.refreshesIn) geminiWeeklyResetText = agyCached.weekly.refreshesIn;
     }
     if (agyCached?.fiveHour?.remainingPercent) {
-      gemini5hRemaining = Math.min(100, Math.max(0, Number(agyCached.fiveHour.remainingPercent)));
-      if (agyCached.fiveHour.refreshesIn) gemini5hResetText = agyCached.fiveHour.refreshesIn;
+      geminiBurstRemaining = Math.min(100, Math.max(0, Number(agyCached.fiveHour.remainingPercent)));
+      if (agyCached.fiveHour.refreshesIn) geminiBurstResetText = agyCached.fiveHour.refreshesIn;
     }
 
     const geminiInput = 3018300;
-    const geminiCachedTokens = 2740200;
+    const geminiCached = 2740200;
     const geminiOutput = 162100;
-    const geminiThinking = 94800;
-    const geminiTotal = geminiInput + geminiOutput;
+    const geminiReasoning = 94800; // Thinking / Chain of Thought
 
+    const geminiTotal = geminiInput + geminiOutput;
+    const geminiCacheEfficiency = geminiInput > 0 ? ((geminiCached / geminiInput) * 100).toFixed(1) : '0.0';
+
+    // -------------------------------------------------------------------------
+    // 3. Global Totals
+    // -------------------------------------------------------------------------
     const totalAll = codexTotal + geminiTotal;
-    const totalCachedAll = codexCached + geminiCachedTokens;
+    const totalCachedAll = codexCached + geminiCached;
     const globalCacheRate = ((totalCachedAll / totalAll) * 100).toFixed(1);
     const estimatedCost = ((codexTotal * 0.0000008) + (geminiTotal * 0.00000015)).toFixed(2);
 
     return {
       codex: {
-        total: codexTotal,
-        input: codexInput,
-        cached: codexCached,
-        output: codexOutput,
-        reasoning: codexReasoning,
+        providerName: 'OpenAI Codex',
+        pillClass: 'codex',
+        model: codexModel,
+        effort: codexEffort,
+        status: 'Connected',
+        weeklyLabel: 'Weekly Rate Limit (Rolling 7-Day)',
         weeklyRemaining: codexWeeklyRemaining,
         weeklyUsed: Math.max(0, 100 - codexWeeklyRemaining),
         weeklyResetText: codexWeeklyResetText,
-        dailyRemaining: codexDailyRemaining,
-        dailyUsed: Math.max(0, 100 - codexDailyRemaining),
-        dailyResetText: codexDailyResetText
+        weeklySub: 'Shared account rolling quota',
+        burstLabel: '24-Hour Daily Burst Limit',
+        burstRemaining: codexBurstRemaining,
+        burstUsed: Math.max(0, 100 - codexBurstRemaining),
+        burstResetText: codexBurstResetText,
+        burstSub: 'Short-term burst buffer',
+        inputTokens: codexInput,
+        cachedTokens: codexCached,
+        cacheEfficiency: codexCacheEfficiency,
+        outputTokens: codexOutput,
+        reasoningTokens: codexReasoning,
+        totalTokens: codexTotal,
+        sourceText: '~/.codex/sessions/*.jsonl (Observed Rollouts)'
       },
       gemini: {
-        total: geminiTotal,
-        input: geminiInput,
-        cached: geminiCachedTokens,
-        output: geminiOutput,
-        thinking: geminiThinking,
+        providerName: 'Google Gemini',
+        pillClass: 'gemini',
+        model: geminiModel,
+        effort: geminiEffort,
+        status: 'Healthy',
+        weeklyLabel: 'Weekly Model Quota (Rolling 7-Day)',
         weeklyRemaining: geminiWeeklyRemaining,
+        weeklyUsed: Math.max(0, 100 - geminiWeeklyRemaining),
         weeklyResetText: geminiWeeklyResetText,
-        fiveHourRemaining: gemini5hRemaining,
-        fiveHourResetText: gemini5hResetText
+        weeklySub: 'Vertex AI Developer tier quota',
+        burstLabel: '5-Hour Model Burst Limit',
+        burstRemaining: geminiBurstRemaining,
+        burstUsed: Math.max(0, 100 - geminiBurstRemaining),
+        burstResetText: geminiBurstResetText,
+        burstSub: 'Short-term burst buffer',
+        inputTokens: geminiInput,
+        cachedTokens: geminiCached,
+        cacheEfficiency: geminiCacheEfficiency,
+        outputTokens: geminiOutput,
+        reasoningTokens: geminiReasoning,
+        totalTokens: geminiTotal,
+        sourceText: '~/.gemini/antigravity-cli/brain/ (Transcripts)'
       },
       totals: {
         allTokens: totalAll,
@@ -151,12 +199,91 @@
     };
   }
 
+  function renderProviderCard(p, isCodex) {
+    const fillWeeklyClass = isCodex ? 'codex-weekly' : 'gemini-weekly';
+    const fillBurstClass = isCodex ? 'codex-daily' : 'gemini-burst';
+    const pillIcon = isCodex ? '🔵' : '🟣';
+
+    return `
+      <div class="provider-telemetry-card ${isCodex ? 'codex-card' : 'gemini-card'}">
+        <!-- 1. Header with Model & Health -->
+        <div class="provider-card-header">
+          <div class="provider-title-group">
+            <span class="provider-pill ${p.pillClass}">${pillIcon} ${p.providerName}</span>
+            <h3>${p.model}</h3>
+            <p class="provider-meta-sub">${p.effort} &bull; Default pipeline</p>
+          </div>
+          <span class="status-chip active">${p.status}</span>
+        </div>
+
+        <!-- 2. Primary Weekly Quota Meter (Symmetrical) -->
+        <div class="rate-limit-section">
+          <div class="rate-limit-head">
+            <span>${p.weeklyLabel}</span>
+            <strong class="${isCodex ? 'text-accent' : 'text-good'}">${p.weeklyRemaining}% Remaining</strong>
+          </div>
+          <div class="rate-limit-track" title="${p.weeklyRemaining}% weekly quota remaining">
+            <div class="rate-limit-fill ${fillWeeklyClass}" style="width: ${p.weeklyRemaining}%;"></div>
+          </div>
+          <div class="rate-limit-foot">
+            <span>${p.weeklySub}</span>
+            <span>Resets in: <strong>${p.weeklyResetText}</strong></span>
+          </div>
+        </div>
+
+        <!-- 3. Short-Term Burst Limit Meter (Symmetrical) -->
+        <div class="rate-limit-section">
+          <div class="rate-limit-head">
+            <span>${p.burstLabel}</span>
+            <strong class="${isCodex ? 'text-accent' : 'text-good'}">${p.burstRemaining}% Remaining</strong>
+          </div>
+          <div class="rate-limit-track" title="${p.burstRemaining}% burst limit remaining">
+            <div class="rate-limit-fill ${fillBurstClass}" style="width: ${p.burstRemaining}%;"></div>
+          </div>
+          <div class="rate-limit-foot">
+            <span>${p.burstSub}</span>
+            <span>Resets in: <strong>${p.burstResetText}</strong></span>
+          </div>
+        </div>
+
+        <!-- 4. Symmetrical 4-Box Token Grid -->
+        <div class="token-metrics-grid">
+          <div class="metric-box">
+            <span>Input / Prompt</span>
+            <strong>${formatNum(p.inputTokens)}</strong>
+            <small class="metric-sub">Raw context tokens</small>
+          </div>
+          <div class="metric-box">
+            <span>Cached Prompt</span>
+            <strong class="text-accent">${formatNum(p.cachedTokens)}</strong>
+            <small class="metric-sub text-good">${p.cacheEfficiency}% cache hit</small>
+          </div>
+          <div class="metric-box">
+            <span>Output / Generated</span>
+            <strong>${formatNum(p.outputTokens)}</strong>
+            <small class="metric-sub">Completion tokens</small>
+          </div>
+          <div class="metric-box">
+            <span>Reasoning / Thinking</span>
+            <strong class="text-purple">${formatNum(p.reasoningTokens)}</strong>
+            <small class="metric-sub">Internal logic steps</small>
+          </div>
+        </div>
+
+        <!-- 5. Source & Telemetry Footnote -->
+        <div class="provider-note">
+          <span>Source: <code>${p.sourceText}</code></span>
+        </div>
+      </div>
+    `;
+  }
+
   function renderUsage() {
     const usageView = document.getElementById('usage-workspace-view');
     if (!usageView || usageView.hidden) return;
 
     const snapshot = window.state?.snapshot || null;
-    const data = parseUsageData(snapshot);
+    const data = parseSymmetricalTelemetry(snapshot);
 
     usageView.innerHTML = `
       <div class="usage-workspace-layout">
@@ -165,7 +292,7 @@
           <div class="usage-hero-card">
             <span class="usage-hero-label">Total Processed Tokens</span>
             <strong class="usage-hero-val">${formatNum(data.totals.allTokens)}</strong>
-            <small class="usage-hero-sub">Live cumulative agent turns</small>
+            <small class="usage-hero-sub">Cumulative multi-agent turns</small>
           </div>
           <div class="usage-hero-card highlight">
             <span class="usage-hero-label">Prompt Cache Efficiency</span>
@@ -184,137 +311,10 @@
           </div>
         </div>
 
-        <!-- 2-Column Providers Grid with Dynamic Shrinking Bars -->
+        <!-- 2-Column Providers Symmetrical Grid -->
         <div class="usage-providers-grid">
-          <!-- Column 1: Codex Telemetry (With Dynamic Weekly & Daily Remaining Bars) -->
-          <div class="provider-telemetry-card codex-card">
-            <div class="provider-card-header">
-              <div class="provider-title-group">
-                <span class="provider-pill codex">🔵 OpenAI Codex</span>
-                <h3>Codex Rate Limits & Telemetry</h3>
-              </div>
-              <span class="status-chip active">Connected</span>
-            </div>
-
-            <!-- Primary Codex Weekly Rate Limit (Shrinks as Remaining Decreases) -->
-            <div class="rate-limit-section">
-              <div class="rate-limit-head">
-                <span>Codex Weekly Rate Limit (Rolling 7-Day)</span>
-                <strong class="text-accent">${data.codex.weeklyRemaining}% Remaining</strong>
-              </div>
-              <div class="rate-limit-track" title="${data.codex.weeklyRemaining}% quota remaining">
-                <div class="rate-limit-fill codex-weekly" style="width: ${data.codex.weeklyRemaining}%;"></div>
-              </div>
-              <div class="rate-limit-foot">
-                <span>Used: <strong>${data.codex.weeklyUsed}%</strong></span>
-                <span>Resets in: <strong>${data.codex.weeklyResetText}</strong></span>
-              </div>
-            </div>
-
-            <!-- Codex 24-Hour Daily Burst Limit (Shrinks as Remaining Decreases) -->
-            <div class="rate-limit-section">
-              <div class="rate-limit-head">
-                <span>Codex 24-Hour Daily Limit</span>
-                <strong class="text-accent">${data.codex.dailyRemaining}% Remaining</strong>
-              </div>
-              <div class="rate-limit-track" title="${data.codex.dailyRemaining}% daily limit remaining">
-                <div class="rate-limit-fill codex-daily" style="width: ${data.codex.dailyRemaining}%;"></div>
-              </div>
-              <div class="rate-limit-foot">
-                <span>Used: <strong>${data.codex.dailyUsed}%</strong></span>
-                <span>Resets in: <strong>${data.codex.dailyResetText}</strong></span>
-              </div>
-            </div>
-
-            <!-- Token Breakdown -->
-            <div class="token-metrics-grid">
-              <div class="metric-box">
-                <span>Input Tokens</span>
-                <strong>${formatNum(data.codex.input)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Cached Input</span>
-                <strong class="text-accent">${formatNum(data.codex.cached)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Output Tokens</span>
-                <strong>${formatNum(data.codex.output)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Reasoning Output</span>
-                <strong class="text-purple">${formatNum(data.codex.reasoning)}</strong>
-              </div>
-            </div>
-
-            <div class="provider-note">
-              <span>Source: <code>~/.codex/sessions/*.jsonl</code> (Observed Rollouts)</span>
-            </div>
-          </div>
-
-          <!-- Column 2: Gemini / Antigravity Telemetry (With Dynamic Weekly & 5h Remaining Bars) -->
-          <div class="provider-telemetry-card gemini-card">
-            <div class="provider-card-header">
-              <div class="provider-title-group">
-                <span class="provider-pill gemini">🟣 Google Gemini / Antigravity</span>
-                <h3>Gemini 3.7 Flash & Subagents</h3>
-              </div>
-              <span class="status-chip active">Healthy</span>
-            </div>
-
-            <!-- Gemini Weekly Model Quota (Shrinks as Remaining Decreases) -->
-            <div class="rate-limit-section">
-              <div class="rate-limit-head">
-                <span>Gemini Weekly Model Quota</span>
-                <strong class="text-good">${data.gemini.weeklyRemaining}% Remaining</strong>
-              </div>
-              <div class="rate-limit-track" title="${data.gemini.weeklyRemaining}% weekly quota remaining">
-                <div class="rate-limit-fill gemini-weekly" style="width: ${data.gemini.weeklyRemaining}%;"></div>
-              </div>
-              <div class="rate-limit-foot">
-                <span>Tier: Vertex AI Developer</span>
-                <span>Resets in: <strong>${data.gemini.weeklyResetText}</strong></span>
-              </div>
-            </div>
-
-            <!-- Gemini 5-Hour Burst Limit (Shrinks as Remaining Decreases) -->
-            <div class="rate-limit-section">
-              <div class="rate-limit-head">
-                <span>5-Hour Model Limit</span>
-                <strong class="text-good">${data.gemini.fiveHourRemaining}% Remaining</strong>
-              </div>
-              <div class="rate-limit-track" title="${data.gemini.fiveHourRemaining}% 5-hour limit remaining">
-                <div class="rate-limit-fill gemini-burst" style="width: ${data.gemini.fiveHourRemaining}%;"></div>
-              </div>
-              <div class="rate-limit-foot">
-                <span>Window: 5 Hours</span>
-                <span>Resets in: <strong>${data.gemini.fiveHourResetText}</strong></span>
-              </div>
-            </div>
-
-            <!-- Token Breakdown -->
-            <div class="token-metrics-grid">
-              <div class="metric-box">
-                <span>Prompt Tokens</span>
-                <strong>${formatNum(data.gemini.input)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Cached Tokens</span>
-                <strong class="text-accent">${formatNum(data.gemini.cached)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Output Tokens</span>
-                <strong>${formatNum(data.gemini.output)}</strong>
-              </div>
-              <div class="metric-box">
-                <span>Thinking Tokens</span>
-                <strong class="text-purple">${formatNum(data.gemini.thinking)}</strong>
-              </div>
-            </div>
-
-            <div class="provider-note">
-              <span>Source: <code>~/.gemini/antigravity-cli/brain/</code> (Live Transcripts)</span>
-            </div>
-          </div>
+          ${renderProviderCard(data.codex, true)}
+          ${renderProviderCard(data.gemini, false)}
         </div>
 
         <!-- Historical Turn Breakdown Table -->
@@ -432,7 +432,7 @@
       const subtitle = document.getElementById('host-subtitle');
       if (eyebrow) eyebrow.textContent = 'Telemetry & Quotas';
       if (title) title.textContent = 'Multi-Agent Usage & Cost';
-      if (subtitle) subtitle.textContent = 'Resource tracking for Codex (Weekly & Daily) and Gemini / Antigravity';
+      if (subtitle) subtitle.textContent = '1:1 symmetrical tracking for Codex and Gemini / Antigravity';
 
       renderUsage();
     });

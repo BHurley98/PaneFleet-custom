@@ -221,11 +221,22 @@
   color: var(--muted, #64748b);
 }
 
+.provider-meta-sub {
+  font-size: 0.72rem;
+  color: var(--muted, #94a3b8);
+  margin: 0.15rem 0 0 0;
+}
+
 .metric-box strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.95rem;
   font-weight: 700;
   color: var(--text, #ffffff);
+}
+
+.metric-sub {
+  font-size: 0.68rem;
+  color: var(--muted, #94a3b8);
 }
 
 .provider-note {
