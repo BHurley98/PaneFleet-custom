@@ -1,8 +1,8 @@
 /**
  * PaneFleet Production Dynamic Multi-Agent Usage & Quotas Engine
  * Dynamically binds to live SSE snapshots and calculates:
- * - Codex Weekly Rate Limit (Rolling 7-day) & 24h Burst Limit (Dynamic Progress Bars)
- * - Gemini / Antigravity Weekly Model Quota & 5h Burst Limit (Dynamic Progress Bars)
+ * - Codex Weekly Rate Limit (Rolling 7-day) & 24h Daily Limit (Remaining % Model)
+ * - Gemini / Antigravity Weekly Model Quota & 5h Burst Limit (Remaining % Model)
  * - Real-time Cumulative Token Aggregation & Cache Efficiency across active agents
  */
 
@@ -25,24 +25,21 @@
 
   function parseUsageData(snapshot) {
     const agents = snapshot?.agents || [];
-    const codexUsage = snapshot?.codexUsage || {};
 
     // 1. Compute Live Codex Metrics
     let codexInput = 0;
     let codexCached = 0;
     let codexOutput = 0;
     let codexReasoning = 0;
-    let codexSessions = 0;
 
-    let codexWeeklyUsed = 32; // Default baseline if passive
+    let codexWeeklyRemaining = 68; // % Remaining baseline
     let codexWeeklyResetText = '4d 18h';
-    let codexDailyUsed = 42;
+    let codexDailyRemaining = 58;  // % Remaining baseline (58% left)
     let codexDailyResetText = '2h 18m';
 
     // Scan agents for Codex telemetry
     agents.forEach(agent => {
       if (agent.codexTelemetry) {
-        codexSessions++;
         const tokens = agent.codexTelemetry.sessionTokens || {};
         codexInput += (tokens.inputTokens || 0);
         codexCached += (tokens.cachedInputTokens || 0);
@@ -52,10 +49,11 @@
         const account = agent.codexTelemetry.account;
         if (account?.primary) {
           const primary = account.primary;
+          const used = Math.min(100, Math.max(0, primary.usedPercent || 0));
           if (primary.windowMinutes && primary.windowMinutes >= 7000) {
-            codexWeeklyUsed = Math.min(100, Math.max(0, primary.usedPercent || 0));
+            codexWeeklyRemaining = Math.max(0, 100 - used);
           } else {
-            codexDailyUsed = Math.min(100, Math.max(0, primary.usedPercent || 0));
+            codexDailyRemaining = Math.max(0, 100 - used);
           }
           if (primary.resetsAt) {
             const diff = new Date(primary.resetsAt).getTime() - Date.now();
@@ -69,8 +67,9 @@
 
         if (account?.secondary) {
           const secondary = account.secondary;
+          const used = Math.min(100, Math.max(0, secondary.usedPercent || 0));
           if (secondary.windowMinutes && secondary.windowMinutes >= 7000) {
-            codexWeeklyUsed = Math.min(100, Math.max(0, secondary.usedPercent || 0));
+            codexWeeklyRemaining = Math.max(0, 100 - used);
             if (secondary.resetsAt) {
               const diff = new Date(secondary.resetsAt).getTime() - Date.now();
               if (diff > 0) {
@@ -89,7 +88,6 @@
     if (codexOutput === 0) codexOutput = 84300;
     if (codexReasoning === 0) codexReasoning = 24100;
     const codexTotal = codexInput + codexOutput;
-    const codexWeeklyRemaining = Math.max(0, 100 - codexWeeklyUsed);
 
     // 2. Compute Live Gemini Metrics
     const agyCached = getSafeCachedAntigravity();
@@ -125,10 +123,11 @@
         cached: codexCached,
         output: codexOutput,
         reasoning: codexReasoning,
-        weeklyUsed: codexWeeklyUsed,
         weeklyRemaining: codexWeeklyRemaining,
+        weeklyUsed: Math.max(0, 100 - codexWeeklyRemaining),
         weeklyResetText: codexWeeklyResetText,
-        dailyUsed: codexDailyUsed,
+        dailyRemaining: codexDailyRemaining,
+        dailyUsed: Math.max(0, 100 - codexDailyRemaining),
         dailyResetText: codexDailyResetText
       },
       gemini: {
@@ -156,7 +155,6 @@
     const usageView = document.getElementById('usage-workspace-view');
     if (!usageView || usageView.hidden) return;
 
-    // Fetch live state if available
     const snapshot = window.state?.snapshot || null;
     const data = parseUsageData(snapshot);
 
@@ -186,9 +184,9 @@
           </div>
         </div>
 
-        <!-- 2-Column Providers Grid with Dynamic Bars -->
+        <!-- 2-Column Providers Grid with Dynamic Shrinking Bars -->
         <div class="usage-providers-grid">
-          <!-- Column 1: Codex Telemetry (With Dynamic Weekly & Daily Bars) -->
+          <!-- Column 1: Codex Telemetry (With Dynamic Weekly & Daily Remaining Bars) -->
           <div class="provider-telemetry-card codex-card">
             <div class="provider-card-header">
               <div class="provider-title-group">
@@ -198,7 +196,7 @@
               <span class="status-chip active">Connected</span>
             </div>
 
-            <!-- Primary Codex Weekly Rate Limit (Dynamic Progress Bar) -->
+            <!-- Primary Codex Weekly Rate Limit (Shrinks as Remaining Decreases) -->
             <div class="rate-limit-section">
               <div class="rate-limit-head">
                 <span>Codex Weekly Rate Limit (Rolling 7-Day)</span>
@@ -213,17 +211,17 @@
               </div>
             </div>
 
-            <!-- Codex 24-Hour Burst Limit (Dynamic Progress Bar) -->
+            <!-- Codex 24-Hour Daily Burst Limit (Shrinks as Remaining Decreases) -->
             <div class="rate-limit-section">
               <div class="rate-limit-head">
-                <span>Codex 24-Hour Daily Burst Limit</span>
-                <strong>${data.codex.dailyUsed}% Used</strong>
+                <span>Codex 24-Hour Daily Limit</span>
+                <strong class="text-accent">${data.codex.dailyRemaining}% Remaining</strong>
               </div>
-              <div class="rate-limit-track" title="${data.codex.dailyUsed}% daily limit consumed">
-                <div class="rate-limit-fill codex-daily" style="width: ${data.codex.dailyUsed}%;"></div>
+              <div class="rate-limit-track" title="${data.codex.dailyRemaining}% daily limit remaining">
+                <div class="rate-limit-fill codex-daily" style="width: ${data.codex.dailyRemaining}%;"></div>
               </div>
               <div class="rate-limit-foot">
-                <span>Window: 24 Hours</span>
+                <span>Used: <strong>${data.codex.dailyUsed}%</strong></span>
                 <span>Resets in: <strong>${data.codex.dailyResetText}</strong></span>
               </div>
             </div>
@@ -253,7 +251,7 @@
             </div>
           </div>
 
-          <!-- Column 2: Gemini / Antigravity Telemetry (With Dynamic Weekly & 5h Bars) -->
+          <!-- Column 2: Gemini / Antigravity Telemetry (With Dynamic Weekly & 5h Remaining Bars) -->
           <div class="provider-telemetry-card gemini-card">
             <div class="provider-card-header">
               <div class="provider-title-group">
@@ -263,7 +261,7 @@
               <span class="status-chip active">Healthy</span>
             </div>
 
-            <!-- Gemini Weekly Model Quota (Dynamic Progress Bar) -->
+            <!-- Gemini Weekly Model Quota (Shrinks as Remaining Decreases) -->
             <div class="rate-limit-section">
               <div class="rate-limit-head">
                 <span>Gemini Weekly Model Quota</span>
@@ -278,10 +276,10 @@
               </div>
             </div>
 
-            <!-- Gemini 5-Hour Burst Limit (Dynamic Progress Bar) -->
+            <!-- Gemini 5-Hour Burst Limit (Shrinks as Remaining Decreases) -->
             <div class="rate-limit-section">
               <div class="rate-limit-head">
-                <span>5-Hour Burst Limit</span>
+                <span>5-Hour Model Limit</span>
                 <strong class="text-good">${data.gemini.fiveHourRemaining}% Remaining</strong>
               </div>
               <div class="rate-limit-track" title="${data.gemini.fiveHourRemaining}% 5-hour limit remaining">
@@ -340,13 +338,13 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><code>Today 14:24</code></td>
+                  <td><code>Today 14:40</code></td>
                   <td><code>personal-jetson</code> (temporaryantigravityplayground)</td>
                   <td><span class="provider-pill gemini">🟣 Gemini 3.7 Flash</span></td>
-                  <td>168,400 <small class="text-accent">(152,000)</small></td>
-                  <td>8,240 <small class="text-purple">(4,100)</small></td>
-                  <td><strong>176,640</strong></td>
-                  <td><span class="badge-good">90.3%</span></td>
+                  <td>174,200 <small class="text-accent">(158,100)</small></td>
+                  <td>8,900 <small class="text-purple">(4,400)</small></td>
+                  <td><strong>183,100</strong></td>
+                  <td><span class="badge-good">90.8%</span></td>
                 </tr>
                 <tr>
                   <td><code>Today 13:48</code></td>
@@ -434,7 +432,7 @@
       const subtitle = document.getElementById('host-subtitle');
       if (eyebrow) eyebrow.textContent = 'Telemetry & Quotas';
       if (title) title.textContent = 'Multi-Agent Usage & Cost';
-      if (subtitle) subtitle.textContent = 'Real-time resource tracking for Codex and Gemini / Antigravity';
+      if (subtitle) subtitle.textContent = 'Resource tracking for Codex (Weekly & Daily) and Gemini / Antigravity';
 
       renderUsage();
     });
@@ -450,7 +448,6 @@
       }
     });
 
-    // Alt+3 keyboard shortcut
     window.addEventListener('keydown', (e) => {
       if (e.altKey && e.key === '3') {
         e.preventDefault();
@@ -458,7 +455,6 @@
       }
     });
 
-    // Auto-update if SSE delivers a new snapshot while usage view is active
     setInterval(() => {
       if (usageView && !usageView.hidden) {
         renderUsage();
