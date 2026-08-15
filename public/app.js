@@ -9407,6 +9407,11 @@ els.refresh.addEventListener('click', () => Promise.all([
 window.addEventListener('panefleet:refresh-snapshot', () => loadSnapshot('manual')
   .then(() => window.dispatchEvent(new CustomEvent('panefleet:refresh-complete', { detail: { snapshot: state.snapshot } })))
   .catch((error) => setNotice(`Usage refresh failed: ${error.message}`, 'error')));
+window.addEventListener('panefleet:refresh-antigravity-usage', (event) => {
+  const session = String(event.detail?.session || '').trim();
+  if (!session) return;
+  void refreshAntigravityUsage(session);
+});
 window.addEventListener('resize', scheduleTerminalViewportResize);
 window.visualViewport?.addEventListener('resize', scheduleTerminalViewportResize);
 window.addEventListener('hashchange', () => {

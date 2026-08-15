@@ -133,6 +133,7 @@ const reviewMetaPath = path.join(reviewDir, 'latest-meta.json');
 const sshRescueStatePath = path.join(dataDir, 'ssh-rescue-state.json');
 const networkMonitorPath = process.env.NETWORK_MONITOR_PATH || path.join(dataDir, 'network-monitor.json');
 const codexUsageHistoryPath = process.env.CODEX_USAGE_HISTORY_PATH || path.join(dataDir, 'codex-usage-history.json');
+const antigravityUsagePath = process.env.ANTIGRAVITY_USAGE_PATH || path.join(dataDir, 'antigravity-usage.json');
 const homeDir = os.homedir();
 const codexHome = process.env.CODEX_HOME || path.join(homeDir, '.codex');
 const codexSessionsRoot = path.join(codexHome, 'sessions');
@@ -6687,7 +6688,10 @@ async function snapshot({ includeMissionDetails = true, runSupervisor = true, ru
     ...agent.codexTelemetry,
     session: agent.session
   })));
-  const codexUsageHistory = await recordCodexUsageSamples(agents.map((agent) => agent[CODEX_USAGE_SAMPLE]).filter(Boolean));
+  const [codexUsageHistory, antigravityUsage] = await Promise.all([
+    recordCodexUsageSamples(agents.map((agent) => agent[CODEX_USAGE_SAMPLE]).filter(Boolean)),
+    readAntigravityUsage()
+  ]);
   const codexStats = codexUsageStats(codexUsageHistory);
   if (runSupervisor) await superviseMissionQueue(agents);
   if (runPromptQueue) await processPromptQueue(agents);
@@ -6796,6 +6800,7 @@ async function snapshot({ includeMissionDetails = true, runSupervisor = true, ru
     agents,
     codexUsage,
     codexStats,
+    antigravityUsage,
     services: serviceSummaries,
     review: clientReview,
     missions,
@@ -7168,6 +7173,47 @@ function antigravityUsageReport(output) {
   };
 }
 
+function normalizedAntigravityUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const quota = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const remainingPercent = Number(entry.remainingPercent);
+    if (!Number.isFinite(remainingPercent) || remainingPercent < 0 || remainingPercent > 100) return null;
+    return {
+      remainingPercent,
+      refreshesIn: String(entry.refreshesIn || '').trim().slice(0, 160)
+    };
+  };
+  const observedAt = new Date(value.observedAt || '');
+  if (!Number.isFinite(observedAt.getTime())) return null;
+  const weekly = quota(value.weekly);
+  const fiveHour = quota(value.fiveHour);
+  if (!weekly && !fiveHour) return null;
+  return {
+    version: 1,
+    session: String(value.session || '').trim().slice(0, 128),
+    account: String(value.account || '').trim().slice(0, 160),
+    weekly,
+    fiveHour,
+    observedAt: observedAt.toISOString()
+  };
+}
+
+async function readAntigravityUsage() {
+  try {
+    return normalizedAntigravityUsage(JSON.parse(await readFile(antigravityUsagePath, 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+async function persistAntigravityUsage(usage, session) {
+  const normalized = normalizedAntigravityUsage({ ...usage, session });
+  if (!normalized) return null;
+  await writeJsonAtomic(antigravityUsagePath, normalized, { spaces: 2 });
+  return normalized;
+}
+
 async function refreshAntigravityUsage(body, req) {
   const session = String(body.session || '').trim();
   const pane = await findPromptableAntigravityPane(session);
@@ -7186,7 +7232,9 @@ async function refreshAntigravityUsage(body, req) {
     return { ok: true, usage };
   });
   await appendAudit(req, { action: 'agent.antigravity_usage_refresh', target: session, ok: result.ok, detail: result.ok ? 'usage_panel_captured; panel_closed=true' : result.error || 'failed' });
-  return result.ok ? { status: 200, body: { ok: true, session, usage: result.usage } } : { status: 409, body: { error: result.error || 'antigravity_usage_refresh_failed' } };
+  if (!result.ok) return { status: 409, body: { error: result.error || 'antigravity_usage_refresh_failed' } };
+  const usage = await persistAntigravityUsage(result.usage, session);
+  return { status: 200, body: { ok: true, session, usage } };
 }
 
 function requestedMultiAgentPromptTargets(body) {
