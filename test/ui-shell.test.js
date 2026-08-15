@@ -876,6 +876,13 @@ test('usage navigation selects the workspace Usage panel, not the Tools drawer p
   assert.match(app, /const selectedViewId = view === 'usage' \? 'usage-workspace-view' : `\$\{view\}-view`/);
 });
 
+test('New Agent launcher uses a root-level portal instead of the Sessions panel', async () => {
+  const [index, app] = await Promise.all([uiSource('index.html'), uiSource('app.js')]);
+  assert.match(index, /id="new-agent-container" class="new-agent-container new-agent-portal"/);
+  assert.doesNotMatch(index, /id="session-list"[^\n]*\n\s*<div id="new-agent-container"/);
+  assert.doesNotMatch(app, /function openNewAgentLauncher[\s\S]{0,300}switchView\('agents'/);
+});
+
 test('Tools classifies apps and listener exposure from live state instead of static labels', () => {
   assert.deepEqual(serviceToolsPresentation({ running: true, portStates: [{ port: 8787, listening: true }] }), {
     group: 'live', tone: 'good', fault: false, running: true, openPorts: [8787], closedPorts: []

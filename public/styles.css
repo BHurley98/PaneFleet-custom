@@ -4225,6 +4225,10 @@ h1 {
   box-shadow: none;
 }
 
+.new-agent-portal .create-card:not(:has(.new-agent-panel[open])) {
+  display: none;
+}
+
 .new-agent-container .new-agent-panel[open] {
   position: fixed;
   inset: 50% auto auto 50%;

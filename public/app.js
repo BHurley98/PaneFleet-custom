@@ -8652,7 +8652,6 @@ function nextAgentNameForWorkspace(workspace) {
 function openNewAgentLauncher(requestedWorkspace = '') {
   closeShortcutHelp({ focus: false });
   setOpenDrawer(null, { focus: false });
-  if (state.activeView !== 'agents' || document.querySelector('#agents-view')?.hidden) switchView('agents', { persist: true });
   const workspace = launcherWorkspaceForProject(requestedWorkspace);
   state.agentDraft = {
     ...state.agentDraft,
