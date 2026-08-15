@@ -4227,6 +4227,11 @@ function isInteractiveAgentSession(value) {
   return isAgentInteractionTarget(session) || /^(?:agy|antigravity)(?:[\w-]*)?$/.test(session);
 }
 
+function isAgentDisplayNameTarget(value) {
+  const session = String(value || '');
+  return isInteractiveAgentSession(session) && !PROTECTED_TMUX_SESSIONS.has(session) && session !== REVIEW_SESSION;
+}
+
 function emptyAgentDisplayNameStore() {
   return { version: 1, labels: {} };
 }
@@ -4236,7 +4241,7 @@ function validateAgentDisplayNameStore(store) {
     throw new Error('agent_display_names_invalid');
   }
   for (const [session, entry] of Object.entries(store.labels)) {
-    if (!isAgentInteractionTarget(session) || !entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('agent_display_names_invalid');
+    if (!isAgentDisplayNameTarget(session) || !entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('agent_display_names_invalid');
     if (typeof entry.name !== 'string' || !entry.name.trim() || entry.name.length > AGENT_DISPLAY_NAME_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(entry.name)) throw new Error('agent_display_names_invalid');
     if (typeof entry.sessionCreatedAt !== 'string' || !validMissionTimestamp(entry.sessionCreatedAt)) throw new Error('agent_display_names_invalid');
   }
@@ -10504,12 +10509,12 @@ async function createAgent(body, req) {
 async function renameAgent(body, req) {
   const session = String(body.session || '').trim();
   const name = String(body.name || '').trim().replace(/\s+/g, ' ');
-  if (!isAgentInteractionTarget(session)) return { status: 400, body: { error: 'invalid_agent_session' } };
+  if (!isAgentDisplayNameTarget(session)) return { status: 400, body: { error: 'invalid_agent_session' } };
   if (!name || name.length > AGENT_DISPLAY_NAME_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(name)) {
     return { status: 400, body: { error: 'invalid_agent_name', maxChars: AGENT_DISPLAY_NAME_MAX_LENGTH } };
   }
   const current = await snapshot({ includeMissionDetails: false, runSupervisor: false, runPromptQueue: false });
-  const agent = current.agents.find((item) => item.session === session && agentHasCodexProcess(item));
+  const agent = current.agents.find((item) => item.session === session && (item.provider === 'codex' || item.provider === 'antigravity'));
   if (!agent?.sessionCreatedAt) return { status: 404, body: { error: 'agent_not_found' } };
   const store = await ensureAgentDisplayNames();
   const next = { ...store, labels: { ...store.labels, [session]: { name, sessionCreatedAt: agent.sessionCreatedAt } } };
