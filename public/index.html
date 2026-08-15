@@ -7,6 +7,7 @@
     <title>PaneFleet — Terminal Workspace</title>
     <script src="/theme-bootstrap.js"></script>
     <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/usage-styles.css">
   </head>
   <body>
     <div id="app" class="shell app-shell">
@@ -19,7 +20,8 @@
         <nav class="tabs primary-nav" aria-label="PaneFleet areas">
           <button id="agents-tab" class="tab active" data-view="agents" data-shortcut-label="Alt 1" type="button" aria-current="page" aria-keyshortcuts="Alt+1"><span>Terminals</span></button>
           <button id="queue-tab" class="tab" data-view="queue" data-shortcut-label="Alt 2" type="button" aria-controls="queue-view" aria-keyshortcuts="Alt+2"><span>Queue <em id="queue-badge" class="tab-badge hidden">0</em></span></button>
-          <button id="tools-tab" class="tab" data-action="drawer-toggle" data-drawer="tools" data-shortcut-label="Alt 3" type="button" aria-controls="tools-drawer" aria-expanded="false" aria-keyshortcuts="Alt+3"><span>Tools</span></button>
+          <button id="usage-tab" class="tab" data-view="usage" data-shortcut-label="Alt 3" type="button" aria-controls="usage-workspace-view" aria-keyshortcuts="Alt+3"><span>Usage</span></button>
+          <button id="tools-tab" class="tab" data-action="drawer-toggle" data-drawer="tools" data-shortcut-label="Alt 4" type="button" aria-controls="tools-drawer" aria-expanded="false" aria-keyshortcuts="Alt+4"><span>Tools</span></button>
         </nav>
 
         <section class="summary-grid" aria-label="Host summary">
@@ -199,6 +201,7 @@
         </section>
 
         <section id="queue-view" class="view queue-workspace-view" aria-labelledby="queue-tab" hidden></section>
+        <section id="usage-workspace-view" class="view usage-workspace-view" aria-labelledby="usage-tab" hidden></section>
       </main>
 
       <div id="terminal-layer" class="terminal-layer"></div>
@@ -224,5 +227,6 @@
       </aside>
     </div>
     <script src="/app.js" type="module"></script>
+    <script src="/usage-analytics.js"></script>
   </body>
 </html>
