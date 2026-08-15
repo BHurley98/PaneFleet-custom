@@ -2672,6 +2672,13 @@ function antigravityIdlePromptVisible(output) {
   return !/\b(?:esc to (?:stop|interrupt)|working|thinking|running|permission|allow|approve)\b/i.test(trailing);
 }
 
+function antigravityWorkVisible(output) {
+  const recent = lastOutputSnippet(output, 48);
+  return /Press esc to interrupt generation\./i.test(recent) ||
+    /^\s*(?:[•◦]\s*)?(?:working|thinking|generating|processing)\s*(?:\([^\n)]{0,160}\)|[.…]{1,3})/im.test(recent) ||
+    /^\s*(?:[•◦]\s*)?(?:working|thinking|generating|processing)\b.*\besc to (?:stop|interrupt)\b/im.test(recent);
+}
+
 function serviceConfigError(location, message) {
   throw new Error(`services.json ${location}: ${message}`);
 }
@@ -3548,6 +3555,9 @@ function inferAgentStatus(agent, preview) {
   const usefulRecent = usefulOutputLines(`${preview?.lastOutput || ''}\n${preview?.lastLine || ''}`).slice(-8).join('\n').toLowerCase();
   const textValue = usefulRecent || rawRecent;
   const cpu = agent.primaryProcess?.cpu || 0;
+  if (agent.provider === 'antigravity' && antigravityWorkVisible(preview?.output || '')) {
+    return { state: 'busy', tone: 'good', reason: 'Antigravity generation active' };
+  }
   if (agent.provider === 'antigravity' && antigravityIdlePromptVisible(preview?.output || '')) {
     return { state: 'idle', tone: 'good', reason: 'prompt ready' };
   }
