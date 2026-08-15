@@ -8604,8 +8604,9 @@ function switchView(view, { focusTab = false, persist = true } = {}) {
     if (selected) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
+  const selectedViewId = view === 'usage' ? 'usage-workspace-view' : `${view}-view`;
   for (const panel of els.views) {
-    const selected = panel.id === `${view}-view`;
+    const selected = panel.id === selectedViewId;
     panel.classList.toggle('active', selected);
     panel.hidden = !selected;
   }

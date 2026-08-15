@@ -871,6 +871,11 @@ test('dashboard view preference honors deep links before durable local selection
   assert.equal(preferredDashboardView(null, 'invalid'), 'agents');
 });
 
+test('usage navigation selects the workspace Usage panel, not the Tools drawer panel', async () => {
+  const app = await uiSource('app.js');
+  assert.match(app, /const selectedViewId = view === 'usage' \? 'usage-workspace-view' : `\$\{view\}-view`/);
+});
+
 test('Tools classifies apps and listener exposure from live state instead of static labels', () => {
   assert.deepEqual(serviceToolsPresentation({ running: true, portStates: [{ port: 8787, listening: true }] }), {
     group: 'live', tone: 'good', fault: false, running: true, openPorts: [8787], closedPorts: []
