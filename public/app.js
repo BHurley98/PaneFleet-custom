@@ -1566,7 +1566,7 @@ function preferredPromptQueueSessions(targets) {
 
 function promptQueueAgentSignal(agent) {
   const status = agent.agentStatus || {};
-  if (agent.queueReady === true) return { tone: 'good', label: 'Green · ready' };
+  if (agent.queueReady === true || (status.state === 'idle' && status.tone === 'good')) return { tone: 'good', label: 'Green · ready' };
   if (status.state === 'busy') return { tone: 'busy', label: 'Blue · working' };
   if (status.state === 'waiting') return { tone: 'warn', label: 'Orange · needs input' };
   if (status.tone === 'bad') return { tone: 'bad', label: 'Red · inspect' };
@@ -1575,6 +1575,10 @@ function promptQueueAgentSignal(agent) {
 
 function promptQueueAwaitingFinish(item) {
   return item.status === 'sent' && item.summaryState === 'pending';
+}
+
+function promptQueueTargetReady(target) {
+  return target?.green === true || (target?.state === 'idle' && target?.tone === 'good');
 }
 
 function promptQueueFinished(item) {
@@ -1591,7 +1595,7 @@ function promptQueueTerminalBoard(agents, items) {
   const openItems = items.filter((item) => ['queued', 'dispatching', 'needs_review'].includes(item.status) || promptQueueAwaitingFinish(item));
   const waitingQueueCount = openItems.filter((item) => item.status === 'queued').length;
   const finishingCount = openItems.filter(promptQueueAwaitingFinish).length;
-  const readyCount = targets.filter((agent) => agent.queueReady === true).length;
+  const readyCount = targets.filter((agent) => promptQueueAgentSignal(agent).tone === 'good').length;
   const workingCount = targets.filter((agent) => agent.agentStatus?.state === 'busy').length;
   const attentionCount = targets.filter((agent) => agent.agentStatus?.state === 'waiting' || agent.agentStatus?.tone === 'bad').length;
   return `
@@ -1642,7 +1646,7 @@ function promptQueueTerminalBoard(agents, items) {
               <span class="prompt-target-foot"><b>${escapeHtml(lineSummary)}</b><small>${next ? `Line head #${Number(next.linePosition || 1)}` : isSelected ? 'Selected' : mobileSingleChoice ? 'Tap to switch' : 'Tap to add'}</small></span>
             </button>
           `;
-        }).join('') : '<div class="prompt-target-empty">No exact live Codex terminals are available.</div>'}
+        }).join('') : '<div class="prompt-target-empty">No exact live agent terminals are available.</div>'}
       </div>
       ${targets.length > 1 ? `
         <div class="prompt-target-bulk-actions">
@@ -1669,14 +1673,14 @@ function promptQueueStateLabel(item) {
   if (item.status === 'needs_review' && item.deliveryStage === 'completion_timeout') return 'Completion timed out';
   if (item.status === 'needs_review' && item.deliveryStage === 'completion_target_replaced') return 'Terminal replaced';
   if (item.status === 'needs_review') return 'Inspect terminal';
-  if (promptQueueAwaitingFinish(item) && item.target?.green) return 'Green · verifying return';
+  if (promptQueueAwaitingFinish(item) && promptQueueTargetReady(item.target)) return 'Green · verifying return';
   if (promptQueueAwaitingFinish(item) && item.target?.state === 'busy') return 'Blue · agent working';
   if (promptQueueAwaitingFinish(item) && item.target?.state === 'waiting') return 'Orange · agent needs input';
   if (promptQueueAwaitingFinish(item) && item.target?.tone === 'bad') return 'Red · inspect agent';
   if (promptQueueAwaitingFinish(item)) return 'Waiting for turn to finish';
   if (item.status === 'sent') return 'Sent';
   if (item.status === 'canceled') return 'Canceled';
-  if (item.target?.green) return 'Green confirmed once';
+  if (promptQueueTargetReady(item.target)) return 'Green · ready';
   if (!item.target?.identityMatches) return 'Exact terminal unavailable';
   if (item.target?.state === 'busy') return 'Blue · working';
   if (item.target?.state === 'waiting') return 'Waiting for input';
@@ -1687,11 +1691,11 @@ function promptQueueTone(item) {
   if (item.status === 'needs_review' && item.deliveryStage === 'waiting_for_manual_submit') return 'warn';
   if (item.status === 'needs_review') return 'bad';
   if (item.status === 'dispatching') return 'busy';
-  if (promptQueueAwaitingFinish(item) && item.target?.green) return 'good';
+  if (promptQueueAwaitingFinish(item) && promptQueueTargetReady(item.target)) return 'good';
   if (promptQueueAwaitingFinish(item)) return item.target?.tone === 'bad' ? 'bad' : item.target?.state === 'waiting' ? 'warn' : 'busy';
   if (item.status === 'sent') return 'good';
   if (item.status === 'canceled') return 'warn';
-  if (item.target?.green) return 'good';
+  if (promptQueueTargetReady(item.target)) return 'good';
   return item.target?.tone || 'neutral';
 }
 
