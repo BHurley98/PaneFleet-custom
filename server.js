@@ -1343,7 +1343,7 @@ function persistentCodexShellCommand(command) {
 
 function antigravityLaunchCommand(selection) {
   const command = process.env.ANTIGRAVITY_COMMAND || path.join(homeDir, '.local', 'bin', 'agy');
-  const args = [shellQuote(command), '--mode=default'];
+  const args = [shellQuote(command), '--dangerously-skip-permissions', '--mode=default'];
   if (selection.model) args.push('--model', shellQuote(selection.model));
   if (selection.reasoning) args.push('--effort', shellQuote(selection.reasoning));
   return args.join(' ');
