@@ -47,6 +47,24 @@ import { trustedLoopbackProxyIpv4 } from './trusted-proxy.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DASHBOARD_PROTOCOL_VERSION = 3;
+const PROVIDER_TELEMETRY_CAPABILITIES = Object.freeze({
+  codex: Object.freeze({
+    label: 'OpenAI Codex',
+    quotaWindows: Object.freeze({ weekly: true, fiveHour: true, daily: false, hourly: false }),
+    accountFields: Object.freeze({ planType: true, resetTime: true, freshness: true }),
+    tokenCounters: Object.freeze({ input: true, cachedInput: true, output: true, reasoning: true }),
+    refresh: Object.freeze({ mode: 'passive-session-telemetry', optInAutomatic: false }),
+    staleAfterMinutes: 15
+  }),
+  antigravity: Object.freeze({
+    label: 'Google Antigravity',
+    quotaWindows: Object.freeze({ weekly: true, fiveHour: true, daily: false, hourly: false }),
+    accountFields: Object.freeze({ planType: false, resetTime: true, freshness: true }),
+    tokenCounters: Object.freeze({ input: false, cachedInput: false, output: false, reasoning: false }),
+    refresh: Object.freeze({ mode: 'idle-session-usage-command', optInAutomatic: true }),
+    staleAfterMinutes: 15
+  })
+});
 
 function localRuntimeImportSpecifiers(source) {
   const specifiers = new Set();
@@ -134,6 +152,8 @@ const sshRescueStatePath = path.join(dataDir, 'ssh-rescue-state.json');
 const networkMonitorPath = process.env.NETWORK_MONITOR_PATH || path.join(dataDir, 'network-monitor.json');
 const codexUsageHistoryPath = process.env.CODEX_USAGE_HISTORY_PATH || path.join(dataDir, 'codex-usage-history.json');
 const antigravityUsagePath = process.env.ANTIGRAVITY_USAGE_PATH || path.join(dataDir, 'antigravity-usage.json');
+const providerUsageHistoryPath = process.env.PROVIDER_USAGE_HISTORY_PATH || path.join(dataDir, 'provider-usage-history.json');
+const PROVIDER_USAGE_HISTORY_MAX = 120;
 const homeDir = os.homedir();
 const codexHome = process.env.CODEX_HOME || path.join(homeDir, '.codex');
 const codexSessionsRoot = path.join(codexHome, 'sessions');
@@ -554,6 +574,8 @@ let networkMonitorRunning = false;
 let codexUsageHistoryStore = null;
 let codexUsageMonitorRunning = false;
 let codexUsageWritePromise = null;
+let providerUsageHistoryStore = null;
+let providerUsageHistoryWritePromise = null;
 const CODEX_USAGE_SAMPLE = Symbol('codexUsageSample');
 let agentSampleStore = null;
 let agentSampleWritePending = false;
@@ -6692,6 +6714,7 @@ async function snapshot({ includeMissionDetails = true, runSupervisor = true, ru
     recordCodexUsageSamples(agents.map((agent) => agent[CODEX_USAGE_SAMPLE]).filter(Boolean)),
     readAntigravityUsage()
   ]);
+  const providerUsageHistory = await recordProviderUsageSnapshots({ codexUsage, antigravityUsage });
   const codexStats = codexUsageStats(codexUsageHistory);
   if (runSupervisor) await superviseMissionQueue(agents);
   if (runPromptQueue) await processPromptQueue(agents);
@@ -6794,13 +6817,15 @@ async function snapshot({ includeMissionDetails = true, runSupervisor = true, ru
       pickerUiKeys: true,
       projectDesk: true,
       projectArtifacts: true,
-      projectArtifactPreviews: true
+      projectArtifactPreviews: true,
+      providerTelemetry: PROVIDER_TELEMETRY_CAPABILITIES
     },
     panes,
     agents,
     codexUsage,
     codexStats,
     antigravityUsage,
+    providerUsageHistory,
     services: serviceSummaries,
     review: clientReview,
     missions,
@@ -7199,6 +7224,65 @@ function normalizedAntigravityUsage(value) {
   };
 }
 
+function providerUsageHistoryEntry(provider, usage) {
+  const observedAt = String(usage?.observedAt || '');
+  if (!Number.isFinite(Date.parse(observedAt))) return null;
+  const quota = (value) => value && Number.isFinite(Number(value.remainingPercent))
+    ? { remainingPercent: Math.max(0, Math.min(100, Number(value.remainingPercent))), refreshesIn: String(value.refreshesIn || '').slice(0, 160) }
+    : null;
+  if (provider === 'antigravity') {
+    const weekly = quota(usage.weekly);
+    const fiveHour = quota(usage.fiveHour);
+    if (!weekly && !fiveHour) return null;
+    return { provider, observedAt: new Date(observedAt).toISOString(), outcome: 'reported', limits: { weekly, fiveHour } };
+  }
+  const pools = Array.isArray(usage?.pools) ? usage.pools : [];
+  const limits = pools.flatMap((pool) => [pool?.account?.primary, pool?.account?.secondary])
+    .filter(Boolean)
+    .map((limit) => ({ windowMinutes: Number(limit.windowMinutes) || 0, remainingPercent: Math.max(0, 100 - Number(limit.usedPercent || 0)), resetsAt: limit.resetsAt || null }))
+    .filter((limit) => limit.windowMinutes > 0);
+  return limits.length ? { provider, observedAt: new Date(observedAt).toISOString(), outcome: 'reported', limits } : null;
+}
+
+function emptyProviderUsageHistory() {
+  return { version: 1, updatedAt: new Date().toISOString(), entries: [] };
+}
+
+function normalizedProviderUsageHistory(value) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.entries)) return emptyProviderUsageHistory();
+  const entries = value.entries.filter((entry) => entry && ['codex', 'antigravity'].includes(entry.provider) && Number.isFinite(Date.parse(entry.observedAt || '')) && ['reported', 'failed'].includes(entry.outcome)).slice(-PROVIDER_USAGE_HISTORY_MAX);
+  return { version: 1, updatedAt: Number.isFinite(Date.parse(value.updatedAt || '')) ? new Date(value.updatedAt).toISOString() : new Date().toISOString(), entries };
+}
+
+async function ensureProviderUsageHistory() {
+  if (providerUsageHistoryStore) return providerUsageHistoryStore;
+  try { providerUsageHistoryStore = normalizedProviderUsageHistory(JSON.parse(await readFile(providerUsageHistoryPath, 'utf8'))); } catch { providerUsageHistoryStore = emptyProviderUsageHistory(); }
+  return providerUsageHistoryStore;
+}
+
+async function recordProviderUsageEntry(entry) {
+  if (!entry) return ensureProviderUsageHistory();
+  while (providerUsageHistoryWritePromise) await providerUsageHistoryWritePromise;
+  const operation = (async () => {
+    const current = await ensureProviderUsageHistory();
+    const prior = current.entries.at(-1);
+    if (prior?.provider === entry.provider && prior?.observedAt === entry.observedAt && prior?.outcome === entry.outcome) return current;
+    const next = { version: 1, updatedAt: new Date().toISOString(), entries: [...current.entries, entry].slice(-PROVIDER_USAGE_HISTORY_MAX) };
+    await mkdir(path.dirname(providerUsageHistoryPath), { recursive: true, mode: 0o700 });
+    await writeJsonAtomic(providerUsageHistoryPath, next, { spaces: 2 });
+    providerUsageHistoryStore = next;
+    return next;
+  })();
+  providerUsageHistoryWritePromise = operation;
+  try { return await operation; } finally { if (providerUsageHistoryWritePromise === operation) providerUsageHistoryWritePromise = null; }
+}
+
+async function recordProviderUsageSnapshots({ codexUsage, antigravityUsage }) {
+  await recordProviderUsageEntry(providerUsageHistoryEntry('codex', codexUsage));
+  await recordProviderUsageEntry(providerUsageHistoryEntry('antigravity', antigravityUsage));
+  return ensureProviderUsageHistory();
+}
+
 async function readAntigravityUsage() {
   try {
     return normalizedAntigravityUsage(JSON.parse(await readFile(antigravityUsagePath, 'utf8')));
@@ -7232,7 +7316,10 @@ async function refreshAntigravityUsage(body, req) {
     return { ok: true, usage };
   });
   await appendAudit(req, { action: 'agent.antigravity_usage_refresh', target: session, ok: result.ok, detail: result.ok ? 'usage_panel_captured; panel_closed=true' : result.error || 'failed' });
-  if (!result.ok) return { status: 409, body: { error: result.error || 'antigravity_usage_refresh_failed' } };
+  if (!result.ok) {
+    await recordProviderUsageEntry({ provider: 'antigravity', observedAt: new Date().toISOString(), outcome: 'failed', reason: String(result.error || 'antigravity_usage_refresh_failed').slice(0, 80), limits: {} });
+    return { status: 409, body: { error: result.error || 'antigravity_usage_refresh_failed' } };
+  }
   const usage = await persistAntigravityUsage(result.usage, session);
   return { status: 200, body: { ok: true, session, usage } };
 }

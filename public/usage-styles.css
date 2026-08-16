@@ -75,6 +75,14 @@
   background: color-mix(in srgb, var(--surface, #121829) 76%, transparent);
 }
 
+[data-telemetry-state="unsupported"] {
+  opacity: 0.72;
+}
+
+[data-telemetry-state="waiting"] {
+  border-style: dashed;
+}
+
 @media (max-width: 560px) {
   .usage-limit-grid { grid-template-columns: 1fr; }
 }

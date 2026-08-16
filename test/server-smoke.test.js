@@ -252,6 +252,13 @@ test('read-only operator APIs expose bounded state and retired paths stay closed
     coverage: 'complete'
   });
   assert.deepEqual(snapshot.codexStats.tickets, []);
+  assert.deepEqual(snapshot.capabilities.providerTelemetry.antigravity.quotaWindows, {
+    weekly: true, fiveHour: true, daily: false, hourly: false
+  });
+  assert.equal(snapshot.capabilities.providerTelemetry.antigravity.tokenCounters.input, false);
+  assert.equal(snapshot.capabilities.providerTelemetry.codex.tokenCounters.input, true);
+  assert.equal(snapshot.providerUsageHistory.version, 1);
+  assert.equal(Array.isArray(snapshot.providerUsageHistory.entries), true);
   assert.deepEqual(snapshot.codexStats.today.agents, []);
   assert.equal(snapshot.review.session, 'codex-orchestrator-review');
   assert.equal(snapshot.review.running, false);

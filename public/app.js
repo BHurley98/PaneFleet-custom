@@ -2922,7 +2922,7 @@ function antigravityTelemetryPanel(agent) {
   const weekly = output.match(/Weekly Limit Remaining[\s\S]{0,180}?(\d+(?:\.\d+)?)%\s*remaining[\s\S]{0,100}?Refreshes in\s*([^\n]+)/i);
   const fiveHour = output.match(/Five Hour Limit Remaining[\s\S]{0,180}?(\d+(?:\.\d+)?)%\s*remaining[\s\S]{0,100}?Refreshes in\s*([^\n]+)/i);
   const cached = (() => { try { return JSON.parse(safeStorageGet('panefleet:antigravity-usage', '{}')); } catch { return {}; } })();
-  const settings = (() => { try { return JSON.parse(safeStorageGet('panefleet:antigravity-usage-settings', '{"enabled":false,"minutes":15}')); } catch { return { enabled: false, minutes: 15 }; } })();
+  const settings = antigravityUsageSettings();
   const model = modelMatch?.[1]?.trim() || 'Model not reported';
   const effort = modelMatch?.[2] ? `${modelMatch[2]} effort` : 'Effort not reported';
   const weeklyUsage = weekly ? { remainingPercent: weekly[1], refreshesIn: weekly[2].trim() } : cached.weekly;
@@ -2940,7 +2940,7 @@ function antigravityTelemetryPanel(agent) {
         <div><span>Five-hour model limit</span><strong>${escapeHtml(fiveHourUsage ? `${fiveHourUsage.remainingPercent}% left` : 'Not refreshed')}</strong><small>${escapeHtml(fiveHourUsage ? `resets in ${fiveHourUsage.refreshesIn}` : 'Use Refresh usage to capture it')}</small></div>
         <div><span>Account plan</span><strong>${escapeHtml(accountMatch?.[2] || 'Not reported')}</strong><small>Shared across Antigravity sessions</small></div>
       </div>
-      <div class="actions compact-actions"><button class="action-button" data-action="antigravity-usage-refresh" data-session="${escapeHtml(agent.session)}" type="button">Refresh usage</button><label>Auto refresh <input data-action="antigravity-usage-auto" type="checkbox" ${settings.enabled ? 'checked' : ''}></label><label>Every <input data-action="antigravity-usage-minutes" type="number" min="5" max="1440" value="${minutes}"> min</label></div>
+      <div class="actions compact-actions"><button class="action-button" data-action="antigravity-usage-refresh" data-session="${escapeHtml(agent.session)}" type="button">Refresh usage</button><label>Auto refresh <input data-action="antigravity-usage-auto" type="checkbox" ${settings.enabled ? 'checked' : ''}></label><label>Every <input data-action="antigravity-usage-minutes" type="number" min="5" max="1440" value="${minutes}"> min</label><small>Scheduler: ${escapeHtml(antigravityUsageSchedulerLabel(settings))}</small></div>
     </section>
   `;
 }
@@ -6754,9 +6754,16 @@ async function sendAntigravityUiKey(session, key) {
 function antigravityUsageSettings() {
   try {
     const saved = JSON.parse(safeStorageGet('panefleet:antigravity-usage-settings', '{"enabled":false,"minutes":15}'));
-    return { enabled: saved.enabled === true, minutes: Math.max(5, Math.min(1440, Number(saved.minutes) || 15)) };
+    return {
+      enabled: saved.enabled === true,
+      minutes: Math.max(5, Math.min(1440, Number(saved.minutes) || 15)),
+      lastAttemptAt: Number.isFinite(Date.parse(saved.lastAttemptAt || '')) ? new Date(saved.lastAttemptAt).toISOString() : '',
+      lastOutcome: String(saved.lastOutcome || 'not_started').slice(0, 160),
+      lastSession: String(saved.lastSession || '').slice(0, 128),
+      lastCheckAt: Number.isFinite(Date.parse(saved.lastCheckAt || '')) ? new Date(saved.lastCheckAt).toISOString() : ''
+    };
   } catch {
-    return { enabled: false, minutes: 15 };
+    return { enabled: false, minutes: 15, lastAttemptAt: '', lastOutcome: 'not_started', lastSession: '', lastCheckAt: '' };
   }
 }
 
@@ -6764,15 +6771,34 @@ function saveAntigravityUsageSettings(next) {
   safeStorageSet('panefleet:antigravity-usage-settings', JSON.stringify(next));
 }
 
+function antigravityUsageSchedulerLabel(settings = antigravityUsageSettings()) {
+  if (!settings.enabled) return 'off by default';
+  if (settings.lastOutcome === 'waiting_for_idle') return 'waiting for an idle eligible session';
+  if (!settings.lastAttemptAt) return 'waiting for its first scheduled refresh';
+  const outcome = settings.lastOutcome === 'succeeded' ? 'last refresh succeeded' : `last refresh ${settings.lastOutcome}`;
+  return `${outcome} · ${missionTimeLabel(settings.lastAttemptAt)}`;
+}
+
+function recordAntigravityUsageScheduler(next) {
+  const current = antigravityUsageSettings();
+  const saved = { ...current, ...next };
+  saveAntigravityUsageSettings(saved);
+  return saved;
+}
+
 async function refreshAntigravityUsage(session, { automatic = false } = {}) {
   if (state.antigravityUsageRefreshing) return;
   state.antigravityUsageRefreshing = true;
+  recordAntigravityUsageScheduler({ lastAttemptAt: new Date().toISOString(), lastOutcome: 'in_progress', lastSession: session });
   try {
     const result = await api('/api/agent/antigravity-usage-refresh', { method: 'POST', body: JSON.stringify({ session }) });
     safeStorageSet('panefleet:antigravity-usage', JSON.stringify(result.usage));
+    recordAntigravityUsageScheduler({ lastOutcome: 'succeeded' });
     if (!automatic) setNotice('Antigravity usage refreshed.');
     await loadSnapshot('manual');
   } catch (error) {
+    // A failed interactive capture may have reached the provider; wait the full interval before any retry.
+    recordAntigravityUsageScheduler({ lastOutcome: automatic ? 'ambiguous_failure' : 'failed' });
     if (!automatic) setNotice(`Antigravity usage refresh failed: ${error.message}`, 'error');
   } finally {
     state.antigravityUsageRefreshing = false;
@@ -6782,11 +6808,17 @@ async function refreshAntigravityUsage(session, { automatic = false } = {}) {
 function scheduleAntigravityUsageRefresh() {
   const settings = antigravityUsageSettings();
   if (!settings.enabled || state.antigravityUsageRefreshing) return;
-  const agent = currentAgent(state.selectedSession);
-  if (agent?.provider !== 'antigravity' || agent.agentStatus?.state !== 'idle') return;
-  let lastObserved = 0;
-  try { lastObserved = Date.parse(JSON.parse(safeStorageGet('panefleet:antigravity-usage', '{}')).observedAt || ''); } catch { /* no cached refresh */ }
-  if (!Number.isFinite(lastObserved) || Date.now() - lastObserved >= settings.minutes * 60_000) void refreshAntigravityUsage(agent.session, { automatic: true });
+  const now = Date.now();
+  const lastAttempt = Date.parse(settings.lastAttemptAt || '');
+  if (Number.isFinite(lastAttempt) && now - lastAttempt < settings.minutes * 60_000) return;
+  const agent = (state.snapshot?.agents || []).find((item) =>
+    item.provider === 'antigravity' && item.agentStatus?.state === 'idle' && item.canSend !== false
+  );
+  if (!agent) {
+    recordAntigravityUsageScheduler({ lastCheckAt: new Date(now).toISOString(), lastOutcome: 'waiting_for_idle' });
+    return;
+  }
+  void refreshAntigravityUsage(agent.session, { automatic: true });
 }
 
 async function renameAgent(session) {
@@ -9272,7 +9304,11 @@ document.addEventListener('change', (event) => {
     const current = antigravityUsageSettings();
     const next = {
       enabled: event.target.matches('[data-action="antigravity-usage-auto"]') ? event.target.checked : current.enabled,
-      minutes: event.target.matches('[data-action="antigravity-usage-minutes"]') ? Math.max(5, Math.min(1440, Number(event.target.value) || 15)) : current.minutes
+      minutes: event.target.matches('[data-action="antigravity-usage-minutes"]') ? Math.max(5, Math.min(1440, Number(event.target.value) || 15)) : current.minutes,
+      lastAttemptAt: current.lastAttemptAt,
+      lastOutcome: current.lastOutcome,
+      lastSession: current.lastSession,
+      lastCheckAt: current.lastCheckAt
     };
     saveAntigravityUsageSettings(next);
     if (event.target.matches('[data-action="antigravity-usage-minutes"]')) event.target.value = String(next.minutes);

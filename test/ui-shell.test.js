@@ -883,6 +883,24 @@ test('New Agent launcher uses a root-level portal instead of the Sessions panel'
   assert.doesNotMatch(app, /function openNewAgentLauncher[\s\S]{0,300}switchView\('agents'/);
 });
 
+test('Antigravity quota scheduling is opt-in, idle-only, and throttles every attempt', async () => {
+  const app = await uiSource('app.js');
+  assert.match(app, /enabled: saved\.enabled === true/);
+  assert.match(app, /lastAttemptAt/);
+  assert.match(app, /lastOutcome/);
+  assert.match(app, /item\.provider === 'antigravity' && item\.agentStatus\?\.state === 'idle' && item\.canSend !== false/);
+  assert.match(app, /now - lastAttempt < settings\.minutes \* 60_000/);
+  assert.match(app, /lastOutcome: automatic \? 'ambiguous_failure' : 'failed'/);
+});
+
+test('provider usage history is bounded and excludes terminal transcripts', async () => {
+  const [server, usage] = await Promise.all([readFile(path.join(root, 'server.js'), 'utf8'), uiSource('usage-analytics.js')]);
+  assert.match(server, /PROVIDER_USAGE_HISTORY_MAX = 120/);
+  assert.match(server, /entries: \[\.\.\.current\.entries, entry\]\.slice\(-PROVIDER_USAGE_HISTORY_MAX\)/);
+  assert.match(usage, /no terminal transcript retained/);
+  assert.match(usage, /never prompts, responses, or terminal output/);
+});
+
 test('Tools classifies apps and listener exposure from live state instead of static labels', () => {
   assert.deepEqual(serviceToolsPresentation({ running: true, portStates: [{ port: 8787, listening: true }] }), {
     group: 'live', tone: 'good', fault: false, running: true, openPorts: [8787], closedPorts: []
